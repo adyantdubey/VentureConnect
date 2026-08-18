@@ -83,7 +83,7 @@ test("ships the expanded demo network and interaction foundations", async () => 
   ]);
 
   assert.match(data, /startupSeeds = \[/);
-  assert.equal((data.match(/^  \["[a-z]/gm) ?? []).length, 50);
+  assert.equal((data.match(/^ {2}\["[a-z]/gm) ?? []).length, 50);
   assert.match(data, /length: 200/);
   assert.match(data, /export const videoPosts: Post\[\] = startups\.map/);
   assert.match(data, /Photo by Pexels · synthetic company/);
