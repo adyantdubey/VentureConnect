@@ -1,5 +1,7 @@
 "use client";
 
+/* eslint-disable jsx-a11y/media-has-caption */
+
 import {
   ArrowUpRight,
   BadgeCheck,
@@ -37,8 +39,9 @@ import {
   Video,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { initialPosts, investors, Post, startups, type CommentItem, type Startup } from "./synthetic-data";
+import { authenticatedFetch, getSupabaseAccessToken, supabase } from "./supabase-client";
 
 type View = "home" | "discover" | "messages" | "network";
 type Role = "investor" | "founder";
@@ -67,6 +70,7 @@ type ProfilePayload = {
 type UploadedAsset = { id: string; url: string; fileName: string; contentType: string; mediaType: "video" | "image"; sizeBytes: number };
 type PostDraft = { headline: string; body: string; tags: string; media?: UploadedAsset };
 type ProfileDraft = { displayName: string; role: Role; headline: string; company: string; bio: string };
+type AuthMode = "signin" | "signup" | "forgot" | "reset";
 
 function viewerFromProfile(profile: ProfilePayload): Viewer {
   const initials = profile.displayName.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase() || "IN";
@@ -93,8 +97,8 @@ function StartupLogo({ startup, size = "normal" }: { startup: Pick<Startup, "ini
 
 function Modal({ children, onClose, wide = false }: { children: React.ReactNode; onClose: () => void; wide?: boolean }) {
   return (
-    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
-      <div className={`modal-panel ${wide ? "modal-wide" : ""}`} role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
+    <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+      <div className={`modal-panel ${wide ? "modal-wide" : ""}`} role="dialog" aria-modal="true">
         <button className="modal-close" aria-label="Close" onClick={onClose}><X size={19} /></button>
         {children}
       </div>
@@ -107,6 +111,7 @@ export default function InnovestartApp() {
   const [viewer, setViewer] = useState<Viewer | null>(null);
   const [role, setRole] = useState<Role>("investor");
   const [authOpen, setAuthOpen] = useState(false);
+  const [authMode, setAuthMode] = useState<AuthMode>("signin");
   const [profileOpen, setProfileOpen] = useState(false);
   const [authChecking, setAuthChecking] = useState(true);
   const [composerOpen, setComposerOpen] = useState(false);
@@ -128,27 +133,75 @@ export default function InnovestartApp() {
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [accountOpen, setAccountOpen] = useState(false);
 
-  useEffect(() => {
-    fetch("/api/profile")
-      .then(async (response) => response.ok ? response.json() : null)
-      .then((payload: { profile?: ProfilePayload } | null) => {
-        if (!payload?.profile) return;
-        let nextViewer = viewerFromProfile(payload.profile);
-        const pendingRole = window.localStorage.getItem("innovestart-pending-role");
-        if (!nextViewer.onboardingComplete && (pendingRole === "founder" || pendingRole === "investor")) nextViewer = { ...nextViewer, role: pendingRole };
-        setViewer(nextViewer);
-        setRole(nextViewer.role);
-        if (!nextViewer.onboardingComplete) setProfileOpen(true);
-      })
-      .catch(() => undefined)
-      .finally(() => setAuthChecking(false));
-    fetch("/api/posts")
-      .then((response) => response.ok ? response.json() : Promise.reject())
-      .then((payload: { posts?: Post[] }) => {
-        if (payload.posts?.length) setPosts((current) => [...payload.posts!, ...current]);
-      })
-      .catch(() => undefined);
+  const loadViewer = useCallback(async () => {
+    try {
+      const response = await authenticatedFetch("/api/profile");
+      if (!response.ok) {
+        if (response.status === 401) setViewer(null);
+        return null;
+      }
+      const payload = await response.json() as { profile?: ProfilePayload };
+      if (!payload.profile) return null;
+      let nextViewer = viewerFromProfile(payload.profile);
+      const pendingRole = window.localStorage.getItem("innovestart-pending-role");
+      if (!nextViewer.onboardingComplete && (pendingRole === "founder" || pendingRole === "investor")) nextViewer = { ...nextViewer, role: pendingRole };
+      setViewer(nextViewer);
+      setRole(nextViewer.role);
+      if (!nextViewer.onboardingComplete) setProfileOpen(true);
+      return nextViewer;
+    } catch {
+      return null;
+    }
   }, []);
+
+  const loadPosts = useCallback(async () => {
+    try {
+      const response = await authenticatedFetch("/api/posts");
+      if (!response.ok) return;
+      const payload = await response.json() as { posts?: Post[] };
+      if (!payload.posts?.length) return;
+      setPosts((current) => {
+        const serverIds = new Set(payload.posts!.map((post) => post.id));
+        return [...payload.posts!, ...current.filter((post) => !serverIds.has(post.id))];
+      });
+    } catch { /* keep the synthetic feed available offline */ }
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    const initialize = async () => {
+      const { data } = await supabase.auth.getSession();
+      if (data.session) await loadViewer();
+      else if (active) setViewer(null);
+      await loadPosts();
+      if (active) setAuthChecking(false);
+    };
+    initialize().catch(() => active && setAuthChecking(false));
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (!active) return;
+      if (event === "PASSWORD_RECOVERY") {
+        setAuthMode("reset");
+        setAuthOpen(true);
+        return;
+      }
+      if (event === "SIGNED_OUT" || !session) {
+        setViewer(null);
+        setAuthChecking(false);
+        return;
+      }
+      if (event === "SIGNED_IN" || event === "USER_UPDATED") {
+        window.setTimeout(() => {
+          loadViewer();
+          loadPosts();
+        }, 0);
+      }
+    });
+    return () => {
+      active = false;
+      subscription.unsubscribe();
+    };
+  }, [loadPosts, loadViewer]);
 
   useEffect(() => {
     if (!toast) return;
@@ -158,22 +211,30 @@ export default function InnovestartApp() {
 
   const requireAuth = () => {
     if (viewer) return true;
+    setAuthMode("signin");
     setAuthOpen(true);
     setToast("Sign in to join the conversation");
     return false;
   };
 
-  const authenticate = () => {
-    window.localStorage.setItem("innovestart-pending-role", role);
-    window.location.assign("/signin-with-chatgpt?return_to=/");
+  const authenticated = async () => {
+    setAuthChecking(true);
+    await loadViewer();
+    await loadPosts();
+    setAuthChecking(false);
+    setAuthOpen(false);
+    setToast("Welcome to Innovestart");
   };
 
-  const signOut = () => {
-    window.location.assign("/signout-with-chatgpt?return_to=/");
+  const signOut = async () => {
+    await supabase.auth.signOut();
+    setViewer(null);
+    setAccountOpen(false);
+    setToast("Signed out securely");
   };
 
   const recordAction = (postId: string, action: string, content?: string) => {
-    fetch("/api/engagement", {
+    authenticatedFetch("/api/engagement", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ postId, action, content }),
@@ -256,7 +317,7 @@ export default function InnovestartApp() {
   const submitPost = async (draft: PostDraft) => {
     if (!viewer) return false;
     try {
-      const response = await fetch("/api/posts", {
+      const response = await authenticatedFetch("/api/posts", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -281,7 +342,7 @@ export default function InnovestartApp() {
 
   const deletePost = async (post: Post) => {
     if (!post.ownedByViewer || !window.confirm("Delete this post and its uploaded media? This cannot be undone.")) return;
-    const response = await fetch(`/api/posts?id=${encodeURIComponent(post.id)}`, { method: "DELETE" });
+    const response = await authenticatedFetch(`/api/posts?id=${encodeURIComponent(post.id)}`, { method: "DELETE" });
     if (!response.ok) {
       const payload = await response.json().catch(() => ({})) as { error?: string };
       setToast(payload.error || "Unable to delete this post");
@@ -293,7 +354,7 @@ export default function InnovestartApp() {
 
   const saveProfile = async (draft: ProfileDraft) => {
     try {
-      const response = await fetch("/api/profile", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(draft) });
+      const response = await authenticatedFetch("/api/profile", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(draft) });
       const payload = await response.json() as { profile?: ProfilePayload; error?: string };
       if (!response.ok || !payload.profile) throw new Error(payload.error || "Unable to save your profile.");
       const nextViewer = viewerFromProfile(payload.profile);
@@ -363,7 +424,7 @@ export default function InnovestartApp() {
               <button className="profile-chip" onClick={() => { setAccountOpen((current) => !current); setNotificationsOpen(false); }}><Avatar initials={viewer.initials} size="small" /><span>{viewer.name.split(" ")[0]}</span><ChevronDown size={14} /></button>
               {accountOpen && <div className="account-popover"><div><Avatar initials={viewer.initials} /><span><strong>{viewer.name}</strong><small>{viewer.title}</small></span></div><button onClick={() => { setAccountOpen(false); setProfileOpen(true); }}><Sparkles size={15} /> Edit my profile</button><button onClick={() => { setAccountOpen(false); goTo("network"); }}><Users size={15} /> View my network</button><button onClick={() => { setAccountOpen(false); signOut(); }}><ArrowUpRight size={15} /> Sign out</button></div>}
             </div>
-          ) : <button className="header-signin" disabled={authChecking} onClick={() => setAuthOpen(true)}>{authChecking ? "Checking…" : "Sign in"}</button>}
+          ) : <button className="header-signin" disabled={authChecking} onClick={() => { setAuthMode("signin"); setAuthOpen(true); }}>{authChecking ? "Checking…" : "Sign in"}</button>}
         </div>
       </header>
 
@@ -380,7 +441,7 @@ export default function InnovestartApp() {
           commentDrafts={commentDrafts}
           feedFilter={feedFilter}
           onFilter={setFeedFilter}
-          onAuth={() => setAuthOpen(true)}
+          onAuth={() => { setAuthMode("signin"); setAuthOpen(true); }}
           onCompose={() => requireAuth() && setComposerOpen(true)}
           onLike={toggleLike}
           onSave={toggleSave}
@@ -397,10 +458,10 @@ export default function InnovestartApp() {
         />
       )}
       {view === "discover" && <DiscoverView following={following} onFollow={toggleFollow} onStartup={setSelectedStartup} />}
-      {view === "messages" && <MessagesView viewer={viewer} onAuth={() => setAuthOpen(true)} />}
-      {view === "network" && <NetworkView viewer={viewer} onAuth={() => setAuthOpen(true)} />}
+      {view === "messages" && <MessagesView viewer={viewer} onAuth={() => { setAuthMode("signin"); setAuthOpen(true); }} />}
+      {view === "network" && <NetworkView viewer={viewer} onAuth={() => { setAuthMode("signin"); setAuthOpen(true); }} />}
 
-      {authOpen && <AuthModal role={role} setRole={setRole} onClose={() => setAuthOpen(false)} onAuthenticate={authenticate} />}
+      {authOpen && <AuthModal key={authMode} role={role} setRole={setRole} initialMode={authMode} onClose={() => setAuthOpen(false)} onAuthenticated={authenticated} />}
       {profileOpen && viewer && <ProfileModal viewer={viewer} required={!viewer.onboardingComplete} onClose={() => viewer.onboardingComplete && setProfileOpen(false)} onSave={saveProfile} />}
       {composerOpen && viewer && <ComposerModal viewer={viewer} onClose={() => setComposerOpen(false)} onSubmit={submitPost} />}
       {selectedStartup && <StartupModal startup={selectedStartup} followed={following.has(selectedStartup.id)} onClose={() => setSelectedStartup(null)} onFollow={() => toggleFollow(selectedStartup.id, selectedStartup.name)} onMessage={() => { if (requireAuth()) { setSelectedStartup(null); goTo("messages"); setToast(`Conversation with ${selectedStartup.name} opened`); } }} />}
@@ -590,11 +651,72 @@ function NetworkView({ viewer, onAuth }: { viewer: Viewer | null; onAuth: () => 
 }
 
 function GatedView({ icon, title, body, onAuth }: { icon: React.ReactNode; title: string; body: string; onAuth: () => void }) {
-  return <div className="gated-page"><div className="gated-glow" /><section className="gated-card card"><div className="gated-icon">{icon}</div><span className="eyebrow">MEMBERS ONLY</span><h1>{title}</h1><p>{body}</p><button className="google-button" onClick={onAuth}><span className="google-g">I</span> Continue securely</button><small>Real member accounts are free during early access.</small></section></div>;
+  return <div className="gated-page"><div className="gated-glow" /><section className="gated-card card"><div className="gated-icon">{icon}</div><span className="eyebrow">MEMBERS ONLY</span><h1>{title}</h1><p>{body}</p><button className="google-button" onClick={onAuth}><Mail size={16} /> Sign in with email</button><small>Real member accounts are free during early access.</small></section></div>;
 }
 
-function AuthModal({ role, setRole, onClose, onAuthenticate }: { role: Role; setRole: (role: Role) => void; onClose: () => void; onAuthenticate: () => void }) {
-  return <Modal onClose={onClose} wide><div className="auth-layout"><section className="auth-story"><Logo /><span className="auth-kicker"><Sparkles size={14} /> FOUNDERS × INVESTORS</span><h2>The right idea<br />deserves the<br /><em>right room.</em></h2><p>Watch the story. Ask a better question. Meet the person who can help move it forward.</p><div className="auth-proof"><div className="proof-avatars"><Avatar initials="RM" color="#ff8064" size="small" /><Avatar initials="KS" color="#4f6ff3" size="small" /><Avatar initials="LI" color="#31b782" size="small" /></div><div><strong>Verified member identity</strong><span>Your posts and uploads stay attached to you</span></div></div></section><section className="auth-form"><span className="auth-step">WELCOME TO INNOVESTART</span><h1>How will you join?</h1><p>Choose your perspective, then create your secure member account.</p><div className="role-switch"><button className={role === "investor" ? "active" : ""} onClick={() => setRole("investor")}><CircleDollarSign size={20} /><span><strong>I&apos;m an investor</strong><small>Discover & connect</small></span>{role === "investor" && <Check size={16} />}</button><button className={role === "founder" ? "active" : ""} onClick={() => setRole("founder")}><Rocket size={20} /><span><strong>I&apos;m a founder</strong><small>Share & grow</small></span>{role === "founder" && <Check size={16} />}</button></div><button className="google-button" onClick={onAuthenticate}><span className="google-g">I</span> Continue with secure sign-in</button><div className="demo-note"><BadgeCheck size={14} /><span><strong>Real account mode</strong> — identity, profile, posts, comments, and uploads are verified on the server.</span></div><p className="auth-terms">By continuing, you agree to our Terms and Privacy Policy.</p></section></div></Modal>;
+function AuthModal({ role, setRole, initialMode, onClose, onAuthenticated }: { role: Role; setRole: (role: Role) => void; initialMode: AuthMode; onClose: () => void; onAuthenticated: () => Promise<void> }) {
+  const [mode, setMode] = useState<AuthMode>(initialMode);
+  const [displayName, setDisplayName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+
+  const switchMode = (next: AuthMode) => {
+    setMode(next);
+    setError("");
+    setMessage("");
+    setPassword("");
+  };
+
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setError("");
+    setMessage("");
+    setBusy(true);
+    try {
+      if (mode === "signup") {
+        window.localStorage.setItem("innovestart-pending-role", role);
+        const { data, error: signUpError } = await supabase.auth.signUp({
+          email: email.trim(),
+          password,
+          options: {
+            data: { display_name: displayName.trim(), role },
+            emailRedirectTo: window.location.origin,
+          },
+        });
+        if (signUpError) throw signUpError;
+        if (data.session) await onAuthenticated();
+        else setMessage("Account created. Check your inbox and click the verification link, then sign in here.");
+      } else if (mode === "signin") {
+        const { error: signInError } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+        if (signInError) throw signInError;
+        await onAuthenticated();
+      } else if (mode === "forgot") {
+        const { error: resetError } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+          redirectTo: `${window.location.origin}/?reset=1`,
+        });
+        if (resetError) throw resetError;
+        setMessage("Password reset email sent. Open the link in that email to choose a new password.");
+      } else {
+        const { error: updateError } = await supabase.auth.updateUser({ password });
+        if (updateError) throw updateError;
+        setMessage("Your password has been updated securely.");
+        window.history.replaceState({}, "", window.location.pathname);
+        await onAuthenticated();
+      }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Authentication could not be completed. Please try again.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const heading = mode === "signup" ? "Create your account." : mode === "forgot" ? "Reset your password." : mode === "reset" ? "Choose a new password." : "Welcome back.";
+  const intro = mode === "signup" ? "Join founders and investors building what comes next." : mode === "forgot" ? "We’ll email you a secure recovery link." : mode === "reset" ? "Use at least eight characters for your new password." : "Sign in to post, upload, comment, and connect.";
+
+  return <Modal onClose={onClose} wide><div className="auth-layout"><section className="auth-story"><Logo /><span className="auth-kicker"><Sparkles size={14} /> FOUNDERS × INVESTORS</span><h2>The right idea<br />deserves the<br /><em>right room.</em></h2><p>Watch the story. Ask a better question. Meet the person who can help move it forward.</p><div className="auth-proof"><div className="proof-avatars"><Avatar initials="RM" color="#ff8064" size="small" /><Avatar initials="KS" color="#4f6ff3" size="small" /><Avatar initials="LI" color="#31b782" size="small" /></div><div><strong>Secure Supabase identity</strong><span>Your posts and uploads stay attached to you</span></div></div></section><section className="auth-form"><span className="auth-step">WELCOME TO INNOVESTART</span><h1>{heading}</h1><p>{intro}</p>{mode !== "forgot" && mode !== "reset" && <div className="auth-mode-tabs"><button type="button" className={mode === "signin" ? "active" : ""} onClick={() => switchMode("signin")}>Sign in</button><button type="button" className={mode === "signup" ? "active" : ""} onClick={() => switchMode("signup")}>Create account</button></div>}{mode === "signup" && <div className="role-switch auth-role-switch"><button type="button" className={role === "investor" ? "active" : ""} onClick={() => setRole("investor")}><CircleDollarSign size={19} /><span><strong>I&apos;m an investor</strong><small>Discover & connect</small></span>{role === "investor" && <Check size={15} />}</button><button type="button" className={role === "founder" ? "active" : ""} onClick={() => setRole("founder")}><Rocket size={19} /><span><strong>I&apos;m a founder</strong><small>Share & grow</small></span>{role === "founder" && <Check size={15} />}</button></div>}<form className="auth-email-form" onSubmit={submit}>{mode === "signup" && <label className="auth-field"><span>Your name</span><input value={displayName} onChange={(event) => setDisplayName(event.target.value)} autoComplete="name" placeholder="Adyanta Dubey" required maxLength={80} /></label>}{mode !== "reset" && <label className="auth-field"><span>Email address</span><input type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" placeholder="you@company.com" required /></label>}{mode !== "forgot" && <label className="auth-field"><span>{mode === "reset" ? "New password" : "Password"}</span><input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete={mode === "signin" ? "current-password" : "new-password"} placeholder="At least 8 characters" required minLength={8} /></label>}{error && <p className="auth-alert auth-error" role="alert">{error}</p>}{message && <p className="auth-alert auth-message" role="status"><BadgeCheck size={15} />{message}</p>}<button className="primary-wide auth-submit" disabled={busy || (mode === "signup" && !displayName.trim())}>{busy ? "Please wait…" : mode === "signup" ? "Create my account" : mode === "forgot" ? "Send reset link" : mode === "reset" ? "Update password" : "Sign in securely"}</button></form>{mode === "signin" && <button className="auth-link-button" onClick={() => switchMode("forgot")}>Forgot your password?</button>}{(mode === "forgot" || mode === "reset") && <button className="auth-link-button" onClick={() => switchMode("signin")}>Back to sign in</button>}<div className="demo-note secure-note"><BadgeCheck size={14} /><span><strong>Protected by Supabase Auth</strong> Passwords are hashed and never stored by Innovestart.</span></div><p className="auth-terms">By continuing, you agree to our Terms and Privacy Policy.</p></section></div></Modal>;
 }
 
 function ProfileModal({ viewer, required, onClose, onSave }: { viewer: Viewer; required: boolean; onClose: () => void; onSave: (draft: ProfileDraft) => Promise<boolean> }) {
@@ -631,43 +753,45 @@ function ComposerModal({ viewer, onClose, onSubmit }: { viewer: Viewer; onClose:
     setUploadProgress(0);
     let uploadId = "";
     try {
-      const startResponse = await fetch("/api/uploads?action=start", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ fileName: file.name, contentType: file.type, sizeBytes: file.size }) });
+      const startResponse = await authenticatedFetch("/api/uploads?action=start", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ fileName: file.name, contentType: file.type, sizeBytes: file.size }) });
       const startPayload = await startResponse.json() as { upload?: { id: string; chunkSize: number }; error?: string };
       if (!startResponse.ok || !startPayload.upload) throw new Error(startPayload.error || "Unable to start the upload.");
       uploadId = startPayload.upload.id;
       const chunkSize = startPayload.upload.chunkSize;
+      const accessToken = await getSupabaseAccessToken();
       for (let offset = 0, part = 0; offset < file.size; offset += chunkSize, part += 1) {
         const chunk = file.slice(offset, Math.min(file.size, offset + chunkSize));
         await new Promise<void>((resolve, reject) => {
           const request = new XMLHttpRequest();
           request.open("PUT", `/api/uploads?id=${encodeURIComponent(uploadId)}&part=${part}`);
           request.setRequestHeader("content-type", "application/octet-stream");
+          if (accessToken) request.setRequestHeader("authorization", `Bearer ${accessToken}`);
           request.upload.onprogress = (event) => { if (event.lengthComputable) setUploadProgress(Math.min(99, Math.round(((offset + event.loaded) / file.size) * 100))); };
           request.onload = () => request.status >= 200 && request.status < 300 ? resolve() : reject(new Error("A file part could not be uploaded."));
           request.onerror = () => reject(new Error("The upload was interrupted. Please try again."));
           request.send(chunk);
         });
       }
-      const completeResponse = await fetch(`/api/uploads?action=complete&id=${encodeURIComponent(uploadId)}`, { method: "POST" });
+      const completeResponse = await authenticatedFetch(`/api/uploads?action=complete&id=${encodeURIComponent(uploadId)}`, { method: "POST" });
       const completePayload = await completeResponse.json() as { asset?: UploadedAsset; error?: string };
       if (!completeResponse.ok || !completePayload.asset) throw new Error(completePayload.error || "Unable to finish the upload.");
       setMedia(completePayload.asset);
       setUploadProgress(100);
     } catch (error) {
-      if (uploadId) fetch(`/api/uploads?id=${encodeURIComponent(uploadId)}`, { method: "DELETE", keepalive: true }).catch(() => undefined);
+      if (uploadId) authenticatedFetch(`/api/uploads?id=${encodeURIComponent(uploadId)}`, { method: "DELETE", keepalive: true }).catch(() => undefined);
       setUploadError(error instanceof Error ? error.message : "Upload failed.");
     } finally {
       setUploading(false);
     }
   };
   const discardMedia = () => {
-    if (media) fetch(`/api/uploads?id=${encodeURIComponent(media.id)}`, { method: "DELETE", keepalive: true }).catch(() => undefined);
+    if (media) authenticatedFetch(`/api/uploads?id=${encodeURIComponent(media.id)}`, { method: "DELETE", keepalive: true }).catch(() => undefined);
     if (preview) URL.revokeObjectURL(preview);
     setMedia(undefined); setPreview(""); setPreviewType("image"); setUploadProgress(0); setUploadError("");
   };
   const close = () => { discardMedia(); onClose(); };
   const publish = async () => { setPublishing(true); const done = await onSubmit({ headline: headline.trim(), body: body.trim(), tags, media }); if (!done) setPublishing(false); };
-  return <Modal onClose={close}><div className="compose-modal"><div className="compose-title"><Avatar initials={viewer.initials} /><div><h2>Create a post</h2><p>Posting as {viewer.company || viewer.name} · owned by your account</p></div></div><label><span>Headline</span><input value={headline} onChange={(event) => setHeadline(event.target.value)} placeholder="What should the network know?" autoFocus /></label><label><span>Your update</span><textarea value={body} onChange={(event) => setBody(event.target.value)} placeholder="Share the story, the milestone, or the question behind it..." rows={6} maxLength={1500} /></label><label><span>Topics</span><input value={tags} onChange={(event) => setTags(event.target.value)} placeholder="AI, SeedRound, Product" /></label>{preview && <div className="upload-preview">{previewType === "video" ? <video src={preview} controls muted /> : <img src={preview} alt="Upload preview" />}<button onClick={discardMedia} aria-label="Remove uploaded media"><X size={15} /></button>{uploading && <div className="upload-overlay"><strong>{uploadProgress}%</strong><span>Uploading securely…</span></div>}</div>}{uploadError && <p className="upload-error">{uploadError}</p>}<div className="compose-tools"><label><Video size={16} /> Add video<input type="file" accept="video/mp4,video/webm,video/quicktime" onChange={(event) => upload(event.target.files?.[0])} /></label><label><ImageIcon size={16} /> Add image<input type="file" accept="image/jpeg,image/png,image/webp,image/gif" onChange={(event) => upload(event.target.files?.[0])} /></label>{media && <span className="upload-ready"><Check size={14} /> {media.fileName}</span>}</div>{uploading && <div className="upload-progress" aria-label={`Upload ${uploadProgress}% complete`}><span style={{ width: `${uploadProgress}%` }} /></div>}<div className="compose-footer"><span>{body.length}/1,500</span><button className="primary-wide" disabled={uploading || publishing || !headline.trim() || !body.trim()} onClick={publish}>{publishing ? "Publishing…" : uploading ? `Uploading ${uploadProgress}%` : <>Publish post <Send size={15} /></>}</button></div></div></Modal>;
+  return <Modal onClose={close}><div className="compose-modal"><div className="compose-title"><Avatar initials={viewer.initials} /><div><h2>Create a post</h2><p>Posting as {viewer.company || viewer.name} · owned by your account</p></div></div><label><span>Headline</span><input value={headline} onChange={(event) => setHeadline(event.target.value)} placeholder="What should the network know?" /></label><label><span>Your update</span><textarea value={body} onChange={(event) => setBody(event.target.value)} placeholder="Share the story, the milestone, or the question behind it..." rows={6} maxLength={1500} /></label><label><span>Topics</span><input value={tags} onChange={(event) => setTags(event.target.value)} placeholder="AI, SeedRound, Product" /></label>{preview && <div className="upload-preview">{previewType === "video" ? <video src={preview} controls muted /> : <img src={preview} alt="Upload preview" />}<button onClick={discardMedia} aria-label="Remove uploaded media"><X size={15} /></button>{uploading && <div className="upload-overlay"><strong>{uploadProgress}%</strong><span>Uploading securely…</span></div>}</div>}{uploadError && <p className="upload-error">{uploadError}</p>}<div className="compose-tools"><label><Video size={16} /> Add video<input type="file" accept="video/mp4,video/webm,video/quicktime" onChange={(event) => upload(event.target.files?.[0])} /></label><label><ImageIcon size={16} /> Add image<input type="file" accept="image/jpeg,image/png,image/webp,image/gif" onChange={(event) => upload(event.target.files?.[0])} /></label>{media && <span className="upload-ready"><Check size={14} /> {media.fileName}</span>}</div>{uploading && <div className="upload-progress" aria-label={`Upload ${uploadProgress}% complete`}><span style={{ width: `${uploadProgress}%` }} /></div>}<div className="compose-footer"><span>{body.length}/1,500</span><button className="primary-wide" disabled={uploading || publishing || !headline.trim() || !body.trim()} onClick={publish}>{publishing ? "Publishing…" : uploading ? `Uploading ${uploadProgress}%` : <>Publish post <Send size={15} /></>}</button></div></div></Modal>;
 }
 
 function VideoModal({ post, onClose }: { post: Post; onClose: () => void }) {

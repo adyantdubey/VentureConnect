@@ -1,4 +1,4 @@
-import { getChatGPTUser } from "../chatgpt-auth";
+import { getSupabaseUser } from "../supabase-auth";
 import { ensureDatabase, getD1 } from "../../db";
 
 export type MemberProfile = {
@@ -24,7 +24,7 @@ type ProfileRow = {
 };
 
 export async function getCurrentMember(options: { create?: boolean } = {}): Promise<MemberProfile | null> {
-  const identity = await getChatGPTUser();
+  const identity = await getSupabaseUser();
   if (!identity) return null;
   await ensureDatabase();
   const d1 = getD1();

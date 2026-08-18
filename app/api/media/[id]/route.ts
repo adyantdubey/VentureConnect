@@ -33,7 +33,7 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
 
   const headers = new Headers({
     "content-type": row.content_type,
-    "content-disposition": `inline; filename="${row.file_name.replace(/[\"\r\n]/g, "")}"`,
+    "content-disposition": `inline; filename="${row.file_name.replace(/["\r\n]/g, "")}"`,
     "cache-control": "public, max-age=31536000, immutable",
     "accept-ranges": "bytes",
   });
