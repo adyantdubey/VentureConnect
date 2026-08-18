@@ -87,7 +87,9 @@ export async function POST(request: Request) {
   }
 
   if (input.action === "tam") {
-    const startup = startupIntelligence.find((item) => item.startupId === input.startupId || item.founderProfileId === member.id);
+    const startup = input.startupId
+      ? startupIntelligence.find((item) => item.startupId === input.startupId)
+      : startupIntelligence.find((item) => item.founderProfileId === member.id);
     if (!startup) return Response.json({ error: "Startup not found." }, { status: 404 });
     if (member.role === "founder" && startup.founderProfileId !== member.id) return Response.json({ error: "Founders can only save analysis for their own startup." }, { status: 403 });
     const analysis = calculateTam(startup, input.scenario ?? "base");

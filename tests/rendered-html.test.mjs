@@ -132,6 +132,8 @@ test("ships the role-aware network, reciprocal ranking, TAM and interaction foun
   assert.match(intelligenceApi, /recommendationsForInvestor/);
   assert.match(intelligenceApi, /recommendationsForFounder/);
   assert.match(intelligenceApi, /Only investors can manage a deal pipeline/);
+  assert.match(intelligenceApi, /Founders can only save analysis for their own startup/);
+  assert.match(intelligenceApi, /input\.startupId\s*\?\s*startupIntelligence\.find/);
   assert.match(database, /MATCH_MODEL_METADATA\.metrics/);
 });
 
