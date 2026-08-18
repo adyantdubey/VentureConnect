@@ -14,10 +14,18 @@ export const profiles = sqliteTable("profiles", {
   stagesJson: text("stages_json").notNull().default("[]"),
   locationsJson: text("locations_json").notNull().default("[]"),
   portfolioStartupIdsJson: text("portfolio_startup_ids_json").notNull().default("[]"),
+  profileDataJson: text("profile_data_json").notNull().default("{}"),
   onboardingComplete: integer("onboarding_complete", { mode: "boolean" }).notNull().default(false),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
   updatedAt: integer("updated_at", { mode: "timestamp" }),
 }, (table) => [uniqueIndex("idx_profiles_google_subject").on(table.googleSubject)]);
+
+export const demoSessions = sqliteTable("demo_sessions", {
+  tokenHash: text("token_hash").primaryKey(),
+  profileId: text("profile_id").notNull().references(() => profiles.id),
+  expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
+  createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+}, (table) => [index("idx_demo_sessions_expires_at").on(table.expiresAt)]);
 
 export const startupRecords = sqliteTable("startups", {
   id: text("id").primaryKey(),
@@ -93,6 +101,9 @@ export const conversations = sqliteTable("conversations", {
   founderProfileId: text("founder_profile_id").notNull().references(() => profiles.id),
   investorProfileId: text("investor_profile_id").notNull().references(() => profiles.id),
   inboxTier: text("inbox_tier", { enum: ["primary", "secondary", "request"] }).notNull().default("request"),
+  routingScore: integer("routing_score").notNull().default(0),
+  routingReasonJson: text("routing_reason_json").notNull().default("[]"),
+  routingModelVersion: text("routing_model_version").notNull().default(""),
   lastMessageAt: integer("last_message_at", { mode: "timestamp" }).notNull(),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
 }, (table) => [
@@ -162,3 +173,84 @@ export const callCandidates = sqliteTable("call_candidates", {
   candidateJson: text("candidate_json").notNull(),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
 }, (table) => [index("idx_call_candidates_call_created").on(table.callId, table.createdAt)]);
+
+export const modelVersions = sqliteTable("model_versions", {
+  id: text("id").primaryKey(),
+  algorithm: text("algorithm").notNull(),
+  featureNamesJson: text("feature_names_json").notNull(),
+  weightsJson: text("weights_json").notNull(),
+  metricsJson: text("metrics_json").notNull(),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
+});
+
+export const matchScores = sqliteTable("match_scores", {
+  id: text("id").primaryKey(),
+  startupId: text("startup_id").notNull(),
+  investorProfileId: text("investor_profile_id").notNull(),
+  investorProbability: integer("investor_probability").notNull(),
+  founderProbability: integer("founder_probability").notNull(),
+  reciprocalScore: integer("reciprocal_score").notNull(),
+  confidence: integer("confidence").notNull(),
+  inboxTier: text("inbox_tier", { enum: ["primary", "secondary", "request"] }).notNull(),
+  featureJson: text("feature_json").notNull(),
+  explanationJson: text("explanation_json").notNull(),
+  modelVersion: text("model_version").notNull(),
+  calculatedAt: integer("calculated_at", { mode: "timestamp" }).notNull(),
+}, (table) => [
+  uniqueIndex("idx_match_scores_pair_model").on(table.startupId, table.investorProfileId, table.modelVersion),
+  index("idx_match_scores_investor_rank").on(table.investorProfileId, table.reciprocalScore),
+  index("idx_match_scores_startup_rank").on(table.startupId, table.reciprocalScore),
+]);
+
+export const interactionEvents = sqliteTable("interaction_events", {
+  id: text("id").primaryKey(),
+  actorProfileId: text("actor_profile_id").notNull(),
+  startupId: text("startup_id"),
+  investorProfileId: text("investor_profile_id"),
+  eventType: text("event_type").notNull(),
+  value: integer("value").notNull().default(1),
+  metadataJson: text("metadata_json").notNull().default("{}"),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
+}, (table) => [
+  index("idx_interaction_events_actor_created").on(table.actorProfileId, table.createdAt),
+  index("idx_interaction_events_startup_type").on(table.startupId, table.eventType),
+]);
+
+export const dealPipeline = sqliteTable("deal_pipeline", {
+  id: text("id").primaryKey(),
+  investorProfileId: text("investor_profile_id").notNull(),
+  startupId: text("startup_id").notNull(),
+  stage: text("stage", { enum: ["saved", "reviewing", "meeting", "diligence", "passed"] }).notNull().default("saved"),
+  notes: text("notes").notNull().default(""),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
+  updatedAt: integer("updated_at", { mode: "timestamp" }).notNull(),
+}, (table) => [
+  uniqueIndex("idx_deal_pipeline_investor_startup").on(table.investorProfileId, table.startupId),
+  index("idx_deal_pipeline_investor_stage").on(table.investorProfileId, table.stage),
+]);
+
+export const marketResearchSources = sqliteTable("market_research_sources", {
+  id: text("id").primaryKey(),
+  sector: text("sector").notNull(),
+  publisher: text("publisher").notNull(),
+  title: text("title").notNull(),
+  url: text("url").notNull(),
+  asOf: text("as_of").notNull(),
+  sourceMetric: text("source_metric").notNull(),
+  dataJson: text("data_json").notNull(),
+  accessedAt: integer("accessed_at", { mode: "timestamp" }).notNull(),
+}, (table) => [index("idx_market_sources_sector").on(table.sector)]);
+
+export const tamAnalyses = sqliteTable("tam_analyses", {
+  id: text("id").primaryKey(),
+  ownerProfileId: text("owner_profile_id").notNull(),
+  startupId: text("startup_id"),
+  sector: text("sector").notNull(),
+  scenario: text("scenario", { enum: ["bear", "base", "bull"] }).notNull(),
+  tamCr: integer("tam_cr").notNull(),
+  samCr: integer("sam_cr").notNull(),
+  somCr: integer("som_cr").notNull(),
+  assumptionsJson: text("assumptions_json").notNull(),
+  sourceIdsJson: text("source_ids_json").notNull(),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
+}, (table) => [index("idx_tam_analyses_owner_created").on(table.ownerProfileId, table.createdAt)]);

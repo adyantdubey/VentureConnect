@@ -1,6 +1,6 @@
 "use client";
 
-/* eslint-disable jsx-a11y/media-has-caption */
+/* eslint-disable jsx-a11y/media-has-caption, @next/next/no-img-element */
 
 import {
   ArrowUpRight,
@@ -19,7 +19,6 @@ import {
   Heart,
   Home,
   Image as ImageIcon,
-  LayoutGrid,
   LineChart,
   Mail,
   MapPin,
@@ -44,13 +43,17 @@ import {
   Users,
   Video,
   VideoOff,
+  Volume2,
+  VolumeX,
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { freshStartups, initialPosts, investors, Post, startups, videoPosts, type CommentItem, type Investor, type Startup } from "./synthetic-data";
-import { authenticatedFetch, getSupabaseAccessToken, supabase } from "./supabase-client";
+import { calculateTam, investorIntelligence, marketSources, MATCH_MODEL_METADATA, MATCH_MODEL_VERSION, recommendationsForFounder, recommendationsForInvestor, startupIntelligence, type InvestorIntelligence, type MatchResult, type StartupIntelligence } from "./intelligence";
+import { authenticatedFetch } from "./supabase-client";
+import { DEMO_LOGINS } from "./demo-logins";
 
-type View = "home" | "reels" | "discover" | "messages" | "network";
+type View = "home" | "reels" | "discover" | "intelligence" | "messages" | "network";
 type Role = "investor" | "founder";
 type Viewer = {
   id: string;
@@ -87,7 +90,6 @@ type ProfilePayload = {
 type UploadedAsset = { id: string; url: string; fileName: string; contentType: string; mediaType: "video" | "image"; sizeBytes: number };
 type PostDraft = { headline: string; body: string; tags: string; media?: UploadedAsset };
 type ProfileDraft = { displayName: string; role: Role; headline: string; company: string; bio: string; sectors: string[]; stages: string[]; locations: string[] };
-type AuthMode = "signin" | "signup" | "forgot" | "reset";
 type CallPayload = { id: string; callerProfileId: string; calleeProfileId: string; callerName?: string; callerColor?: string; conversationId?: string; mode: "voice" | "video"; status: "ringing" | "active" | "declined" | "ended"; offer?: RTCSessionDescriptionInit | null; answer?: RTCSessionDescriptionInit | null };
 
 function viewerFromProfile(profile: ProfilePayload): Viewer {
@@ -133,12 +135,27 @@ function Modal({ children, onClose, wide = false }: { children: React.ReactNode;
   );
 }
 
+function ChoiceMenu({ label, value, options, onChange, icon, compact = false }: { label: string; value: string; options: Array<{ value: string; label: string }>; onChange: (value: string) => void; icon?: React.ReactNode; compact?: boolean }) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const root = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (event: MouseEvent) => { if (root.current && !root.current.contains(event.target as Node)) setOpen(false); };
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", escape);
+    return () => { document.removeEventListener("mousedown", close); document.removeEventListener("keydown", escape); };
+  }, [open]);
+  const selected = options.find((option) => option.value === value)?.label ?? value;
+  const visible = options.filter((option) => option.label.toLowerCase().includes(query.toLowerCase()));
+  return <div className={`choice-menu ${compact ? "compact" : ""}`} ref={root}><span className="choice-label">{icon}{label}</span><button type="button" className="choice-trigger" aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen((current) => !current)}><span>{selected}</span><ChevronDown size={15} /></button>{open && <div className="choice-popover"><label><Search size={14} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={`Search ${label.toLowerCase()}…`} /></label><div role="listbox" aria-label={label}>{visible.map((option) => <button type="button" role="option" aria-selected={option.value === value} className={option.value === value ? "selected" : ""} key={option.value} onClick={() => { onChange(option.value); setOpen(false); setQuery(""); }}><span>{option.label}</span>{option.value === value && <Check size={15} />}</button>)}{!visible.length && <p>No matching option</p>}</div></div>}</div>;
+}
+
 export default function InnovestartApp() {
   const [view, setView] = useState<View>("home");
   const [viewer, setViewer] = useState<Viewer | null>(null);
-  const [role, setRole] = useState<Role>("investor");
   const [authOpen, setAuthOpen] = useState(false);
-  const [authMode, setAuthMode] = useState<AuthMode>("signin");
   const [profileOpen, setProfileOpen] = useState(false);
   const [authChecking, setAuthChecking] = useState(true);
   const [composerOpen, setComposerOpen] = useState(false);
@@ -158,6 +175,7 @@ export default function InnovestartApp() {
   const [mobileMenu, setMobileMenu] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [accountOpen, setAccountOpen] = useState(false);
+  const [incomingCall, setIncomingCall] = useState<CallPayload | null>(null);
 
   const loadViewer = useCallback(async () => {
     try {
@@ -168,11 +186,8 @@ export default function InnovestartApp() {
       }
       const payload = await response.json() as { profile?: ProfilePayload };
       if (!payload.profile) return null;
-      let nextViewer = viewerFromProfile(payload.profile);
-      const pendingRole = window.localStorage.getItem("innovestart-pending-role");
-      if (!nextViewer.onboardingComplete && (pendingRole === "founder" || pendingRole === "investor")) nextViewer = { ...nextViewer, role: pendingRole };
+      const nextViewer = viewerFromProfile(payload.profile);
       setViewer(nextViewer);
-      setRole(nextViewer.role);
       if (!nextViewer.onboardingComplete) setProfileOpen(true);
       return nextViewer;
     } catch {
@@ -196,37 +211,12 @@ export default function InnovestartApp() {
   useEffect(() => {
     let active = true;
     const initialize = async () => {
-      const { data } = await supabase.auth.getSession();
-      if (data.session) await loadViewer();
-      else if (active) setViewer(null);
+      await loadViewer();
       await loadPosts();
       if (active) setAuthChecking(false);
     };
     initialize().catch(() => active && setAuthChecking(false));
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      if (!active) return;
-      if (event === "PASSWORD_RECOVERY") {
-        setAuthMode("reset");
-        setAuthOpen(true);
-        return;
-      }
-      if (event === "SIGNED_OUT" || !session) {
-        setViewer(null);
-        setAuthChecking(false);
-        return;
-      }
-      if (event === "SIGNED_IN" || event === "USER_UPDATED") {
-        window.setTimeout(() => {
-          loadViewer();
-          loadPosts();
-        }, 0);
-      }
-    });
-    return () => {
-      active = false;
-      subscription.unsubscribe();
-    };
+    return () => { active = false; };
   }, [loadPosts, loadViewer]);
 
   useEffect(() => {
@@ -235,9 +225,22 @@ export default function InnovestartApp() {
     return () => window.clearTimeout(timer);
   }, [toast]);
 
+  useEffect(() => {
+    if (!viewer || incomingCall) return;
+    let active = true;
+    const poll = async () => {
+      const response = await authenticatedFetch("/api/calls");
+      if (!response.ok || !active) return;
+      const payload = await response.json() as { incoming?: CallPayload | null };
+      if (payload.incoming) setIncomingCall(payload.incoming);
+    };
+    const kickoff = window.setTimeout(poll, 0);
+    const timer = window.setInterval(poll, 3_000);
+    return () => { active = false; window.clearTimeout(kickoff); window.clearInterval(timer); };
+  }, [incomingCall, viewer]);
+
   const requireAuth = () => {
     if (viewer) return true;
-    setAuthMode("signin");
     setAuthOpen(true);
     setToast("Sign in to join the conversation");
     return false;
@@ -253,7 +256,7 @@ export default function InnovestartApp() {
   };
 
   const signOut = async () => {
-    await supabase.auth.signOut();
+    await fetch("/api/demo-auth", { method: "DELETE" });
     setViewer(null);
     setAccountOpen(false);
     setToast("Signed out securely");
@@ -385,9 +388,7 @@ export default function InnovestartApp() {
       if (!response.ok || !payload.profile) throw new Error(payload.error || "Unable to save your profile.");
       const nextViewer = viewerFromProfile(payload.profile);
       setViewer(nextViewer);
-      setRole(nextViewer.role);
       setProfileOpen(false);
-      window.localStorage.removeItem("innovestart-pending-role");
       setToast("Profile saved");
       return true;
     } catch (error) {
@@ -420,16 +421,17 @@ export default function InnovestartApp() {
         <button className="mobile-menu-button" aria-label="Open navigation" onClick={() => setMobileMenu((current) => !current)}><Menu size={20} /></button>
         <button className="logo-button" onClick={() => goTo("home")} aria-label="Innovestart home"><Logo /></button>
         <nav className={`main-nav ${mobileMenu ? "mobile-open" : ""}`} aria-label="Primary navigation">
-          <NavButton active={view === "home"} icon={<Home />} label="Home" onClick={() => goTo("home")} />
+          <NavButton active={view === "home"} icon={<Home />} label={viewer?.role === "investor" ? "Deal flow" : "Workspace"} onClick={() => goTo("home")} />
           <NavButton active={view === "reels"} icon={<Play />} label="Reels" onClick={() => goTo("reels")} />
-          <NavButton active={view === "discover"} icon={<Compass />} label="Discover" onClick={() => goTo("discover")} />
+          <NavButton active={view === "discover"} icon={<Compass />} label={viewer?.role === "investor" ? "Startups" : "Discover"} onClick={() => goTo("discover")} />
+          {viewer && <NavButton active={view === "intelligence"} icon={<Sparkles />} label={viewer.role === "investor" ? "Intelligence" : "AI matches"} onClick={() => goTo("intelligence")} />}
           <NavButton active={view === "messages"} icon={<MessageCircle />} label="Messages" onClick={() => goTo("messages")} />
-          <NavButton active={view === "network"} icon={<Users />} label="Network" onClick={() => goTo("network")} />
+          <NavButton active={view === "network"} icon={<Users />} label={viewer?.role === "founder" ? "Investors" : "Network"} onClick={() => goTo("network")} />
         </nav>
         <div className="top-actions">
           <div className="global-search">
             <Search size={16} />
-            <input value={search} onChange={(event) => { setSearch(event.target.value); setSearchOpen(true); }} onFocus={() => setSearchOpen(true)} placeholder="Search startups, sectors..." aria-label="Search" />
+            <input value={search} onChange={(event) => { setSearch(event.target.value); setSearchOpen(true); }} onFocus={() => setSearchOpen(true)} placeholder={viewer?.role === "investor" ? "Search companies, markets…" : "Search investors, companies…"} aria-label="Search" />
             {searchOpen && (
               <div className="search-popover">
                 <div className="popover-label">{search ? "Search results" : "Trending startups"}<button onClick={() => setSearchOpen(false)} aria-label="Close search"><X size={15} /></button></div>
@@ -448,10 +450,10 @@ export default function InnovestartApp() {
           </div>
           {viewer ? (
             <div className="account-wrap top-popover-wrap">
-              <button className="profile-chip" onClick={() => { setAccountOpen((current) => !current); setNotificationsOpen(false); }}><Avatar initials={viewer.initials} size="small" /><span>{viewer.name.split(" ")[0]}</span><ChevronDown size={14} /></button>
+              <button className="profile-chip" onClick={() => { setAccountOpen((current) => !current); setNotificationsOpen(false); }}><Avatar initials={viewer.initials} size="small" /><span>{viewer.name.split(" ")[0]}<small>{viewer.role}</small></span><ChevronDown size={14} /></button>
               {accountOpen && <div className="account-popover"><div><Avatar initials={viewer.initials} /><span><strong>{viewer.name}</strong><small>{viewer.title}</small></span></div><button onClick={() => { setAccountOpen(false); setProfileOpen(true); }}><Sparkles size={15} /> Edit my profile</button><button onClick={() => { setAccountOpen(false); goTo("network"); }}><Users size={15} /> View my network</button><button onClick={() => { setAccountOpen(false); signOut(); }}><ArrowUpRight size={15} /> Sign out</button></div>}
             </div>
-          ) : <button className="header-signin" disabled={authChecking} onClick={() => { setAuthMode("signin"); setAuthOpen(true); }}>{authChecking ? "Checking…" : "Sign in"}</button>}
+          ) : <button className="header-signin" disabled={authChecking} onClick={() => setAuthOpen(true)}>{authChecking ? "Checking…" : "Sign in"}</button>}
         </div>
       </header>
 
@@ -468,7 +470,7 @@ export default function InnovestartApp() {
           commentDrafts={commentDrafts}
           feedFilter={feedFilter}
           onFilter={setFeedFilter}
-          onAuth={() => { setAuthMode("signin"); setAuthOpen(true); }}
+          onAuth={() => setAuthOpen(true)}
           onCompose={() => requireAuth() && setComposerOpen(true)}
           onLike={toggleLike}
           onSave={toggleSave}
@@ -485,13 +487,15 @@ export default function InnovestartApp() {
       )}
       {view === "reels" && <ReelsView posts={videoPosts} liked={liked} saved={saved} onLike={toggleLike} onSave={toggleSave} onShare={sharePost} onStartup={setSelectedStartup} />}
       {view === "discover" && <DiscoverView following={following} onFollow={toggleFollow} onStartup={setSelectedStartup} />}
-      {view === "messages" && <MessagesView viewer={viewer} onAuth={() => { setAuthMode("signin"); setAuthOpen(true); }} />}
-      {view === "network" && <NetworkView viewer={viewer} onAuth={() => { setAuthMode("signin"); setAuthOpen(true); }} onMessage={(profileId) => { window.localStorage.setItem("innovestart-message-recipient", profileId); goTo("messages"); }} />}
+      {view === "intelligence" && <IntelligenceView viewer={viewer} onAuth={() => setAuthOpen(true)} onStartup={setSelectedStartup} onMessage={(profileId) => { window.localStorage.setItem("innovestart-message-recipient", profileId); goTo("messages"); }} onToast={setToast} />}
+      {view === "messages" && <MessagesView viewer={viewer} onAuth={() => setAuthOpen(true)} />}
+      {view === "network" && <NetworkView viewer={viewer} onAuth={() => setAuthOpen(true)} onStartup={setSelectedStartup} onMessage={(profileId) => { window.localStorage.setItem("innovestart-message-recipient", profileId); goTo("messages"); }} />}
 
-      {authOpen && <AuthModal key={authMode} role={role} setRole={setRole} initialMode={authMode} onClose={() => setAuthOpen(false)} onAuthenticated={authenticated} />}
+      {authOpen && <AuthModal onClose={() => setAuthOpen(false)} onAuthenticated={authenticated} />}
       {profileOpen && viewer && <ProfileModal viewer={viewer} required={!viewer.onboardingComplete} onClose={() => viewer.onboardingComplete && setProfileOpen(false)} onSave={saveProfile} />}
       {composerOpen && viewer && <ComposerModal viewer={viewer} onClose={() => setComposerOpen(false)} onSubmit={submitPost} />}
       {selectedStartup && <StartupModal startup={selectedStartup} followed={following.has(selectedStartup.id)} onClose={() => setSelectedStartup(null)} onFollow={() => toggleFollow(selectedStartup.id, selectedStartup.name)} onMessage={() => { if (requireAuth()) { setSelectedStartup(null); goTo("messages"); setToast(`Conversation with ${selectedStartup.name} opened`); } }} />}
+      {incomingCall && <CallModal target={{ id: incomingCall.callerProfileId, name: incomingCall.callerName || "Incoming member", color: incomingCall.callerColor || "#536ed7" }} mode={incomingCall.mode} incomingCall={incomingCall} conversationId={incomingCall.conversationId} onClose={() => setIncomingCall(null)} />}
       {toast && <div className="toast"><Check size={16} />{toast}</div>}
     </main>
   );
@@ -536,9 +540,9 @@ function HomeView(props: HomeViewProps) {
       <aside className="left-rail">
         {props.viewer ? <SignedInProfile viewer={props.viewer} onNavigate={props.onNavigate} /> : <JoinCard onAuth={props.onAuth} />}
         <section className="card menu-card">
-          <button onClick={() => props.onUtility(`${props.saved.size || 14} saved startups are ready to review`)}><Bookmark size={17} /> Saved startups <b>{props.saved.size || 14}</b></button>
-          <button onClick={() => props.onUtility("Your next event is Founder Office Hours on Thursday")}><CalendarDays size={17} /> Upcoming events <b>3</b></button>
-          <button onClick={() => props.onUtility("Founder circles are opening in the next MVP release")}><LayoutGrid size={17} /> Founder circles</button>
+          <button onClick={() => props.viewer?.role === "investor" ? props.onNavigate("intelligence") : props.onUtility(`${props.saved.size || 14} saved opportunities are ready to review`)}><Bookmark size={17} /> {props.viewer?.role === "investor" ? "Deal pipeline" : "Saved opportunities"} <b>{props.saved.size || 14}</b></button>
+          <button onClick={() => props.onUtility(props.viewer?.role === "investor" ? "Your next diligence call is Thursday" : "Your next investor meeting is Thursday")}><CalendarDays size={17} /> Upcoming meetings <b>3</b></button>
+          <button onClick={() => props.onNavigate(props.viewer ? "intelligence" : "discover")}><Sparkles size={17} /> {props.viewer?.role === "investor" ? "AI deal flow" : "Investor matches"}</button>
         </section>
         <div className="mini-promo">
           <span><Sparkles size={14} /> INVESTOR OFFICE HOURS</span>
@@ -549,9 +553,10 @@ function HomeView(props: HomeViewProps) {
       </aside>
 
       <section className="feed-column">
+        {props.viewer && <RoleSnapshot viewer={props.viewer} onNavigate={props.onNavigate} />}
         <div className="feed-heading">
-          <div><span className="eyebrow">TODAY ON INNOVESTART</span><h1>{props.viewer ? `Ideas worth following, ${props.viewer.name.split(" ")[0]}.` : "Meet the people building what’s next."}</h1></div>
-          <label className="filter-select"><SlidersHorizontal size={13} /><select value={props.feedFilter} onChange={(event) => props.onFilter(event.target.value as HomeViewProps["feedFilter"])} aria-label="Filter feed"><option>For you</option><option>Following</option><option>Newest</option></select><ChevronDown size={13} /></label>
+          <div><span className="eyebrow">{props.viewer?.role === "investor" ? "LATEST FROM YOUR DEAL FLOW" : props.viewer?.role === "founder" ? "FOUNDER SIGNAL" : "TODAY ON INNOVESTART"}</span><h1>{props.viewer ? props.viewer.role === "investor" ? `Companies worth a closer look, ${props.viewer.name.split(" ")[0]}.` : `Build the round with better context, ${props.viewer.name.split(" ")[0]}.` : "Meet the people building what’s next."}</h1></div>
+          <ChoiceMenu compact label="Feed" value={props.feedFilter} icon={<SlidersHorizontal size={13} />} options={[{ value: "For you", label: "Curated for you" }, { value: "Following", label: "People you follow" }, { value: "Newest", label: "Newest first" }]} onChange={(value) => props.onFilter(value as HomeViewProps["feedFilter"])} />
         </div>
 
         <section className="story-tray" aria-label="Fresh stories">
@@ -560,9 +565,9 @@ function HomeView(props: HomeViewProps) {
         </section>
 
         <section className="composer card">
-          <div className="composer-top"><Avatar initials={props.viewer?.initials ?? "YOU"} /><button onClick={props.onCompose}>Share a milestone, question, or opportunity...</button></div>
+          <div className="composer-top"><Avatar initials={props.viewer?.initials ?? "YOU"} /><button onClick={props.onCompose}>{props.viewer?.role === "investor" ? "Share a thesis note or market observation…" : "What changed in your company this week?"}</button></div>
           <div className="composer-actions">
-            <button onClick={props.onCompose}><span className="action-symbol lilac"><Video size={14} /></span> Video pitch</button>
+            <button onClick={props.onCompose}><span className="action-symbol lilac"><Video size={14} /></span> {props.viewer?.role === "investor" ? "Market note" : "Video pitch"}</button>
             <button onClick={props.onCompose}><span className="action-symbol mint"><ImageIcon size={14} /></span> Photo</button>
             <button onClick={props.onCompose}><span className="action-symbol amber"><Sparkles size={14} /></span> Milestone</button>
             <button className="primary-button" onClick={props.onCompose}>Post</button>
@@ -635,6 +640,15 @@ function HomeView(props: HomeViewProps) {
   );
 }
 
+function RoleSnapshot({ viewer, onNavigate }: { viewer: Viewer; onNavigate: (view: View) => void }) {
+  if (viewer.role === "investor") {
+    const matches = recommendationsForInvestor(viewer.id, 3);
+    return <section className="role-snapshot investor-snapshot"><div><span className="eyebrow">INVESTOR CONTROL ROOM</span><h2>Three companies moved into range.</h2><p>Ranked against your thesis, stage, cheque, geography and portfolio context.</p><button onClick={() => onNavigate("intelligence")}>Open AI deal flow <ArrowUpRight size={15} /></button></div><div className="snapshot-matches">{matches.map(({ startup, match }) => <article key={startup.startupId}><span>{match.reciprocalScore}</span><div><strong>{startup.name}</strong><small>{startup.sector} · {startup.stage}</small></div></article>)}</div></section>;
+  }
+  const matches = recommendationsForFounder(viewer.id, 3);
+  return <section className="role-snapshot founder-snapshot"><div><span className="eyebrow">FUNDRAISING WORKSPACE</span><h2>Your investor map is taking shape.</h2><p>See reciprocal fit, likely objections and the strongest route into each conversation.</p><button onClick={() => onNavigate("intelligence")}>Review investor matches <ArrowUpRight size={15} /></button></div><div className="snapshot-matches">{matches.map(({ investor, match }) => <article key={investor.profileId}><span>{match.reciprocalScore}</span><div><strong>{investor.name}</strong><small>{investor.firm} · {match.inboxTier}</small></div></article>)}</div></section>;
+}
+
 function SignedInProfile({ viewer, onNavigate }: { viewer: Viewer; onNavigate: (view: View) => void }) {
   return <section className="profile-card card"><div className="profile-cover" /><div className="profile-body"><Avatar initials={viewer.initials} size="large" /><h2>{viewer.name}</h2><p>{viewer.title}</p><div className="profile-stats"><div><strong>{viewer.role === "investor" ? "12" : "₹1.8Cr"}</strong><span>{viewer.role === "investor" ? "Investments" : "Annual revenue"}</span></div><div><strong>3.2k</strong><span>Followers</span></div></div><button className="secondary-button full-width" onClick={() => onNavigate("network")}>View profile</button></div></section>;
 }
@@ -647,8 +661,31 @@ function CompactStartup({ startup, followed, onFollow, onOpen }: { startup: Star
   return <div className="startup-row"><button className="logo-button" onClick={onOpen}><StartupLogo startup={startup} size="small" /></button><button className="startup-row-copy" onClick={onOpen}><strong>{startup.name}</strong><span>{startup.sector} · {startup.stage}</span><small><i className="growth-dot" /> {startup.signal}</small></button><button className={`round-follow ${followed ? "active" : ""}`} onClick={onFollow} aria-label={`${followed ? "Unfollow" : "Follow"} ${startup.name}`}>{followed ? <Check size={14} /> : <Plus size={15} />}</button></div>;
 }
 
+function ReelVideo({ post, index }: { post: Post; index: number }) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [muted, setMuted] = useState(true);
+  const [playing, setPlaying] = useState(false);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const stream = video.closest(".reels-stream");
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting && entry.intersectionRatio >= 0.6) {
+        video.play().catch(() => setPlaying(false));
+      } else {
+        video.pause();
+      }
+    }, { root: stream, threshold: [0, 0.6, 1] });
+    observer.observe(video);
+    return () => observer.disconnect();
+  }, []);
+
+  return <><video ref={videoRef} controls playsInline muted={muted} loop autoPlay={index === 0} preload={index < 2 ? "auto" : "metadata"} poster={post.poster} aria-label={`${post.startup}: ${post.mediaTitle}`} onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)}><source src={post.mediaUrl} type="video/mp4" /></video><button className="reel-sound-control" type="button" onClick={() => setMuted((current) => !current)} aria-label={muted ? "Turn sound on" : "Mute video"}>{muted ? <VolumeX size={15} /> : <Volume2 size={15} />}<span>{muted ? "Sound off" : "Sound on"}</span><i className={playing ? "playing" : ""} /></button></>;
+}
+
 function ReelsView({ posts, liked, saved, onLike, onSave, onShare, onStartup }: { posts: Post[]; liked: Set<string>; saved: Set<string>; onLike: (id: string) => void; onSave: (id: string) => void; onShare: (post: Post) => void; onStartup: (startup: Startup) => void }) {
-  return <div className="reels-page"><header className="reels-header"><div><span className="eyebrow">30 FOUNDER STORIES</span><h1>Watch the story,<br />not just the pitch.</h1></div><p>Scroll vertically through startup introductions. Videos play in place, with the company context kept close.</p></header><section className="reels-stream" aria-label="Startup reels">{posts.map((post, index) => { const startup = startups.find((item) => item.id === post.startupId); return <article className="reel-card" key={post.id}><video controls playsInline preload={index < 2 ? "metadata" : "none"} poster={post.poster} aria-label={`${post.startup}: ${post.mediaTitle}`}><source src={post.mediaUrl} type="video/mp4" /></video><div className="reel-shade" /><div className="reel-copy"><button onClick={() => startup && onStartup(startup)}><span className="startup-logo logo-small" style={{ background: post.logoColor }}>{post.logo}</span><span><strong>{post.startup} <BadgeCheck size={14} /></strong><small>{post.meta.split(" · ").slice(0, 2).join(" · ")}</small></span></button><h2>{post.mediaTitle}</h2><p>{post.body}</p><div>{post.tags.slice(0, 3).map((tag) => <span key={tag}>#{tag}</span>)}</div><small>{post.sourceLabel}</small></div><aside className="reel-actions"><button className={liked.has(post.id) ? "active" : ""} onClick={() => onLike(post.id)}><Heart size={21} fill={liked.has(post.id) ? "currentColor" : "none"} /><span>{post.likes + (liked.has(post.id) ? 1 : 0)}</span></button><button onClick={() => onShare(post)}><Share2 size={21} /><span>Share</span></button><button className={saved.has(post.id) ? "active" : ""} onClick={() => onSave(post.id)}><Bookmark size={21} fill={saved.has(post.id) ? "currentColor" : "none"} /><span>Save</span></button></aside><span className="reel-count">{String(index + 1).padStart(2, "0")} / 30</span></article>; })}</section></div>;
+  return <div className="reels-page"><header className="reels-header"><div><span className="eyebrow">30 FOUNDER STORIES</span><h1>Watch the story,<br />not just the pitch.</h1></div><p>Scroll vertically through startup introductions. The reel in view plays automatically; turn on sound whenever you want it.</p></header><section className="reels-stream" aria-label="Startup reels">{posts.map((post, index) => { const startup = startups.find((item) => item.id === post.startupId); return <article className="reel-card" key={post.id}><ReelVideo post={post} index={index} /><div className="reel-shade" /><div className="reel-copy"><button onClick={() => startup && onStartup(startup)}><span className="startup-logo logo-small" style={{ background: post.logoColor }}>{post.logo}</span><span><strong>{post.startup} <BadgeCheck size={14} /></strong><small>{post.meta.split(" · ").slice(0, 2).join(" · ")}</small></span></button><h2>{post.mediaTitle}</h2><p>{post.body}</p><div>{post.tags.slice(0, 3).map((tag) => <span key={tag}>#{tag}</span>)}</div><small>{post.sourceUrl ? <a href={post.sourceUrl} target="_blank" rel="noreferrer">{post.sourceLabel}</a> : post.sourceLabel}</small></div><aside className="reel-actions"><button className={liked.has(post.id) ? "active" : ""} onClick={() => onLike(post.id)}><Heart size={21} fill={liked.has(post.id) ? "currentColor" : "none"} /><span>{post.likes + (liked.has(post.id) ? 1 : 0)}</span></button><button onClick={() => onShare(post)}><Share2 size={21} /><span>Share</span></button><button className={saved.has(post.id) ? "active" : ""} onClick={() => onSave(post.id)}><Bookmark size={21} fill={saved.has(post.id) ? "currentColor" : "none"} /><span>Save</span></button></aside><span className="reel-count">{String(index + 1).padStart(2, "0")} / 30</span></article>; })}</section></div>;
 }
 
 function DiscoverView({ following, onFollow, onStartup }: { following: Set<string>; onFollow: (id: string, name: string) => void; onStartup: (startup: Startup) => void }) {
@@ -658,25 +695,88 @@ function DiscoverView({ following, onFollow, onStartup }: { following: Set<strin
   const filtered = startups
     .filter((startup) => (sector === "All sectors" || startup.sector === sector) && (stage === "All stages" || startup.stage === stage))
     .sort((a, b) => sortMode === "Trending" ? b.signal.localeCompare(a.signal) : sortMode === "Recently added" ? b.founded.localeCompare(a.founded) : a.name.localeCompare(b.name));
-  return <div className="workspace-page"><section className="discover-hero"><div><span className="eyebrow">COMPANIES TO BELIEVE IN</span><h1>Discover builders<br />worth backing.</h1><p>Watch their stories, understand what they’ve proven, and start a thoughtful conversation when the fit feels right.</p></div><div className="hero-proof"><div><strong>126</strong><span>Startups raising</span></div><div><strong>34</strong><span>Communities</span></div><div><strong>8.7k</strong><span>Warm introductions</span></div></div></section><div className="discover-toolbar"><div>{(["Recommended", "Trending", "Recently added"] as const).map((mode) => <button key={mode} className={sortMode === mode ? "active" : ""} onClick={() => setSortMode(mode)}>{mode === "Recommended" ? <Sparkles size={15} /> : mode === "Trending" ? <TrendingUp size={15} /> : <Clock3 size={15} />}{mode}</button>)}</div><div className="filter-group"><label><select value={sector} onChange={(event) => setSector(event.target.value)}><option>All sectors</option>{Array.from(new Set(startups.map((item) => item.sector))).map((item) => <option key={item}>{item}</option>)}</select><ChevronDown size={14} /></label><label><select value={stage} onChange={(event) => setStage(event.target.value)}><option>All stages</option>{Array.from(new Set(startups.map((item) => item.stage))).map((item) => <option key={item}>{item}</option>)}</select><ChevronDown size={14} /></label></div></div><div className="startup-card-grid">{filtered.map((startup) => <article className="startup-card card" key={startup.id}><button className="startup-card-image" style={{ backgroundImage: `linear-gradient(180deg, rgba(27,37,64,.03), rgba(27,37,64,.7)), url(${startup.poster})` }} onClick={() => onStartup(startup)}><div><StartupLogo startup={startup} /><span>{startup.stage}</span></div><strong>{startup.tagline}</strong></button><div className="startup-card-body"><div className="startup-card-title"><button onClick={() => onStartup(startup)}><h2>{startup.name} <BadgeCheck size={16} /></h2><p><MapPin size={12} /> {startup.location} · Founded {startup.founded}</p></button><button className={`round-follow ${following.has(startup.id) ? "active" : ""}`} onClick={() => onFollow(startup.id, startup.name)}>{following.has(startup.id) ? <Check size={15} /> : <Plus size={16} />}</button></div><p>{startup.description}</p><div className="startup-metrics"><div><span>WHAT THEY’RE RAISING</span><strong>{startup.ask.replace("Raising ", "")}</strong></div><div><span>WHAT THEY’VE PROVEN</span><strong>{startup.growth}</strong></div><div><span>ONE MORE SIGNAL</span><strong>{startup.signal}</strong></div></div><div className="card-tag-row">{startup.tags.map((tag) => <span key={tag}>{tag}</span>)}</div></div></article>)}</div></div>;
+  const sectorOptions = [{ value: "All sectors", label: "Every sector" }, ...Array.from(new Set(startups.map((item) => item.sector))).map((item) => ({ value: item, label: item }))];
+  const stageOptions = [{ value: "All stages", label: "Every stage" }, ...Array.from(new Set(startups.map((item) => item.stage))).map((item) => ({ value: item, label: item }))];
+  return <div className="workspace-page"><section className="discover-hero"><div><span className="eyebrow">SIGNAL BEFORE CONSENSUS</span><h1>Find momentum<br />before the crowd.</h1><p>Move from founder story to traction, context, and a thoughtful first conversation—without losing the human signal.</p></div><div className="hero-proof"><div><strong>30</strong><span>Complete companies</span></div><div><strong>20</strong><span>Active investors</span></div><div><strong>600</strong><span>Modelled matches</span></div></div></section><div className="discover-toolbar"><div>{(["Recommended", "Trending", "Recently added"] as const).map((mode) => <button key={mode} className={sortMode === mode ? "active" : ""} onClick={() => setSortMode(mode)}>{mode === "Recommended" ? <Sparkles size={15} /> : mode === "Trending" ? <TrendingUp size={15} /> : <Clock3 size={15} />}{mode === "Recommended" ? "Best fit" : mode === "Recently added" ? "Just joined" : mode}</button>)}</div><div className="filter-group"><ChoiceMenu label="Sector" value={sector} options={sectorOptions} onChange={setSector} /><ChoiceMenu label="Stage" value={stage} options={stageOptions} onChange={setStage} /></div></div><div className="startup-card-grid">{filtered.map((startup) => <article className="startup-card card" key={startup.id}><button className="startup-card-image" style={{ backgroundImage: `url(${startup.poster})` }} onClick={() => onStartup(startup)}><div><StartupLogo startup={startup} /><span>{startup.stage}</span></div><strong>{startup.tagline}</strong></button><div className="startup-card-body"><div className="startup-card-title"><button onClick={() => onStartup(startup)}><h2>{startup.name} <BadgeCheck size={16} /></h2><p><MapPin size={12} /> {startup.location} · Founded {startup.founded}</p></button><button className={`round-follow ${following.has(startup.id) ? "active" : ""}`} onClick={() => onFollow(startup.id, startup.name)}>{following.has(startup.id) ? <Check size={15} /> : <Plus size={16} />}</button></div><p>{startup.description}</p><div className="startup-metrics"><div><span>ROUND</span><strong>{startup.ask.replace("Raising ", "")}</strong></div><div><span>TRACTION</span><strong>{startup.growth}</strong></div><div><span>SIGNAL</span><strong>{startup.signal}</strong></div></div><div className="card-tag-row">{startup.tags.map((tag) => <span key={tag}>{tag}</span>)}</div></div></article>)}</div></div>;
+}
+
+type InvestorRecommendation = { startup: Startup; intelligence: StartupIntelligence; match: MatchResult; market: ReturnType<typeof calculateTam> };
+type FounderRecommendation = { investor: Investor; intelligence: InvestorIntelligence; match: MatchResult };
+
+function IntelligenceView({ viewer, onAuth, onStartup, onMessage, onToast }: { viewer: Viewer | null; onAuth: () => void; onStartup: (startup: Startup) => void; onMessage: (profileId: string) => void; onToast: (message: string) => void }) {
+  const [tab, setTab] = useState<"matches" | "pipeline" | "market">("matches");
+  const [investorRecommendations, setInvestorRecommendations] = useState<InvestorRecommendation[]>([]);
+  const [founderRecommendations, setFounderRecommendations] = useState<FounderRecommendation[]>([]);
+  const [pipeline, setPipeline] = useState<Record<string, string>>({});
+  const [scenario, setScenario] = useState<"bear" | "base" | "bull">("base");
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!viewer) return;
+    let active = true;
+    authenticatedFetch("/api/intelligence").then(async (response) => {
+      if (!response.ok) throw new Error("Unable to load Intelligence");
+      const payload = await response.json() as { recommendations?: Array<InvestorRecommendation | FounderRecommendation>; pipeline?: Array<{ startupId: string; stage: string }> };
+      if (!active) return;
+      if (viewer.role === "investor") setInvestorRecommendations((payload.recommendations ?? []) as InvestorRecommendation[]);
+      else setFounderRecommendations((payload.recommendations ?? []) as FounderRecommendation[]);
+      setPipeline(Object.fromEntries((payload.pipeline ?? []).map((item) => [item.startupId, item.stage])));
+    }).catch(() => {
+      if (!active) return;
+      if (viewer.role === "investor") setInvestorRecommendations(recommendationsForInvestor(viewer.id, 18).map(({ startup, match }) => ({ startup: startups.find((item) => item.id === startup.startupId)!, intelligence: startup, match, market: calculateTam(startup) })));
+      else setFounderRecommendations(recommendationsForFounder(viewer.id, 18).map(({ investor, match }) => ({ investor: investors.find((item) => item.profileId === investor.profileId)!, intelligence: investor, match })));
+    }).finally(() => active && setLoading(false));
+    return () => { active = false; };
+  }, [viewer]);
+
+  if (!viewer) return <GatedView icon={<Sparkles size={30} />} title="Intelligence built around your mandate." body="Sign in to see reciprocal matches, explanations, market sizing and role-specific recommendations." onAuth={onAuth} />;
+
+  const updatePipeline = async (startupId: string, stage: "saved" | "reviewing" | "meeting" | "diligence" | "passed") => {
+    setPipeline((current) => ({ ...current, [startupId]: stage }));
+    const response = await authenticatedFetch("/api/intelligence", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "pipeline", startupId, stage }) });
+    if (!response.ok) { onToast("Pipeline could not be updated"); return; }
+    onToast(stage === "passed" ? "Startup moved to Passed" : `Startup moved to ${stage}`);
+  };
+
+  const tabs = viewer.role === "investor" ? (["matches", "pipeline", "market"] as const) : (["matches", "market"] as const);
+  return <div className="workspace-page intelligence-page"><section className="intelligence-hero"><div><span className="eyebrow">INNOVESTART MATCH · {MATCH_MODEL_VERSION}</span><h1>{viewer.role === "investor" ? "A sharper view of what deserves attention." : "Know who fits—and why—before you reach out."}</h1><p>{viewer.role === "investor" ? "A reciprocal ranking system combining mandate, cheque, geography, thesis language, portfolio context and company evidence." : "Investor recommendations balance their likelihood of interest with the value they can bring to your company."}</p></div><div className="model-proof"><div><strong>50</strong><span>Complete profiles</span></div><div><strong>600</strong><span>Evaluated pairs</span></div><div><strong>10</strong><span>Explainable features</span></div><div><strong>{(MATCH_MODEL_METADATA.metrics.auc * 100).toFixed(1)}%</strong><span>Synthetic holdout AUC</span></div></div></section><nav className="intelligence-tabs" aria-label="Intelligence sections">{tabs.map((item) => <button className={tab === item ? "active" : ""} key={item} onClick={() => setTab(item)}>{item === "matches" ? viewer.role === "investor" ? "Recommended companies" : "Investor matches" : item === "pipeline" ? "Deal pipeline" : viewer.role === "investor" ? "Market map" : "TAM intelligence"}</button>)}</nav>{loading ? <div className="intelligence-loading card"><Sparkles size={22} /><strong>Scoring reciprocal matches…</strong><span>Applying mandate, thesis, stage, cheque and market features.</span></div> : viewer.role === "investor" ? <InvestorIntelligenceContent tab={tab} recommendations={investorRecommendations} pipeline={pipeline} onStartup={onStartup} onPipeline={updatePipeline} /> : <FounderIntelligenceContent tab={tab} viewer={viewer} recommendations={founderRecommendations} scenario={scenario} onScenario={setScenario} onMessage={onMessage} />}</div>;
+}
+
+function InvestorIntelligenceContent({ tab, recommendations, pipeline, onStartup, onPipeline }: { tab: "matches" | "pipeline" | "market"; recommendations: InvestorRecommendation[]; pipeline: Record<string, string>; onStartup: (startup: Startup) => void; onPipeline: (startupId: string, stage: "saved" | "reviewing" | "meeting" | "diligence" | "passed") => void }) {
+  if (tab === "market") return <MarketMap />;
+  const visible = tab === "pipeline" ? recommendations.filter((item) => pipeline[item.startup.id] && pipeline[item.startup.id] !== "passed") : recommendations;
+  return <><div className="intelligence-section-head"><div><span className="eyebrow">{tab === "pipeline" ? "ACTIVE REVIEW" : "RECIPROCAL RANKING"}</span><h2>{tab === "pipeline" ? `${visible.length} companies in your pipeline` : "Best current thesis matches"}</h2></div><p>{tab === "pipeline" ? "Move companies through a focused review workflow without losing the original match explanation." : "Scores update from declared preferences now and real interaction signals as the network grows."}</p></div><div className="recommendation-grid">{visible.map(({ startup, intelligence, match, market }, index) => <article className="recommendation-card card" key={startup.id}><header><div><span className="rank-number">#{String(index + 1).padStart(2, "0")}</span><StartupLogo startup={startup} /><span><strong>{startup.name}</strong><small>{startup.sector} · {startup.stage} · {startup.location}</small></span></div><div className={`match-score tier-${match.inboxTier}`}><strong>{match.reciprocalScore}</strong><span>match</span></div></header><button className="recommendation-image" style={{ backgroundImage: `url(${startup.poster})` }} onClick={() => onStartup(startup)} aria-label={`View ${startup.name}`}><span>{intelligence.businessModel}</span><strong>{startup.tagline}</strong></button><div className="score-strip"><div><span>Investor interest</span><strong>{match.investorProbability}%</strong></div><div><span>Founder benefit</span><strong>{match.founderProbability}%</strong></div><div><span>Market CAGR</span><strong>{market.cagr}%</strong></div></div><div className="match-explanation"><span>WHY IT RANKS</span>{match.reasons.slice(0, 3).map((reason) => <p key={reason}><Check size={13} />{reason}</p>)}{match.concerns[0] && <p className="concern"><Target size={13} />{match.concerns[0]}</p>}</div><footer><button className="secondary-button" onClick={() => onStartup(startup)}>Review company</button><button className="pipeline-button" onClick={() => onPipeline(startup.id, pipeline[startup.id] === "reviewing" ? "diligence" : "reviewing")}><Bookmark size={15} />{pipeline[startup.id] ? pipeline[startup.id] : "Save to pipeline"}</button></footer></article>)}</div>{!visible.length && <div className="empty-intelligence card"><BriefcaseBusiness size={30} /><h3>Your review queue is clear.</h3><p>Save a recommended company to begin a structured deal-flow review.</p></div>}</>;
+}
+
+function FounderIntelligenceContent({ tab, viewer, recommendations, scenario, onScenario, onMessage }: { tab: "matches" | "pipeline" | "market"; viewer: Viewer; recommendations: FounderRecommendation[]; scenario: "bear" | "base" | "bull"; onScenario: (scenario: "bear" | "base" | "bull") => void; onMessage: (profileId: string) => void }) {
+  const startup = startupIntelligence.find((item) => item.founderProfileId === viewer.id) ?? startupIntelligence[0];
+  if (tab === "market") {
+    const analysis = calculateTam(startup, scenario);
+    return <div className="tam-workspace"><div className="tam-summary card"><div className="tam-head"><div><span className="eyebrow">BOTTOM-UP MARKET MODEL</span><h2>{startup.name} market intelligence</h2><p>Transparent scenarios based on an addressable-unit model—not an unsupported generated number.</p></div><div className="scenario-switch">{(["bear", "base", "bull"] as const).map((item) => <button className={scenario === item ? "active" : ""} key={item} onClick={() => onScenario(item)}>{item}</button>)}</div></div><div className="tam-numbers"><article><span>TAM</span><strong>₹{analysis.tamCr.toLocaleString("en-IN")} Cr</strong><small>Total addressable demand</small></article><article><span>SAM</span><strong>₹{analysis.samCr.toLocaleString("en-IN")} Cr</strong><small>{Math.round(analysis.serviceableRate * 100)}% serviceable market</small></article><article><span>SOM</span><strong>₹{analysis.somCr.toLocaleString("en-IN")} Cr</strong><small>{(analysis.obtainableRate * 100).toFixed(1)}% obtainable share</small></article></div><div className="tam-method"><span>CALCULATION</span><strong>{analysis.formula}</strong><p>Scenario: {scenario} · Referenced CAGR: {analysis.cagr}% · Confidence: {analysis.source.confidence}</p></div></div><aside className="source-card card"><span className="eyebrow">SOURCE RECORD</span><h3>{analysis.source.title}</h3><p>{analysis.source.sourceMetric}</p><dl><div><dt>Publisher</dt><dd>{analysis.source.publisher}</dd></div><div><dt>Reference period</dt><dd>{analysis.source.asOf}</dd></div><div><dt>Accessed</dt><dd>18 Aug 2026</dd></div></dl><a href={analysis.source.url} target="_blank" rel="noreferrer">Open primary source <ArrowUpRight size={14} /></a></aside></div>;
+  }
+  return <><div className="intelligence-section-head"><div><span className="eyebrow">RECIPROCAL INVESTOR FIT</span><h2>Investors aligned with {startup.name}</h2></div><p>Ranking balances likely investor interest with cheque, portfolio and operating value for your company.</p></div><div className="founder-match-list">{recommendations.map(({ investor, intelligence, match }, index) => <article className="founder-match-card card" key={investor.profileId}><div className="match-rank"><span>#{String(index + 1).padStart(2, "0")}</span><div className={`match-score tier-${match.inboxTier}`}><strong>{match.reciprocalScore}</strong><small>match</small></div></div><Avatar initials={investor.initials} color={investor.color} size="large" /><div className="founder-match-main"><span className="eyebrow">{intelligence.investorType} · {intelligence.leadPreference}</span><h2>{investor.name}</h2><p>{investor.role}</p><blockquote>{intelligence.thesis}</blockquote><div className="match-facts"><span>₹{intelligence.ticketMinCr}–₹{intelligence.ticketMaxCr} Cr</span><span>{intelligence.stages.join(" / ")}</span><span>{intelligence.responseRate}% response rate</span></div><div className="match-reasons">{match.reasons.slice(0, 2).map((reason) => <span key={reason}><Check size={13} />{reason}</span>)}</div></div><div className="founder-match-action"><span className={`routing-pill tier-${match.inboxTier}`}>{match.inboxTier} route</span><small>{match.investorProbability}% investor interest</small><button onClick={() => onMessage(investor.profileId)}><MessageCircle size={15} /> Message investor</button></div></article>)}</div></>;
+}
+
+function MarketMap() {
+  return <div className="market-map"><div className="intelligence-section-head"><div><span className="eyebrow">SOURCE-BACKED OPPORTUNITY MAP</span><h2>Markets represented in your deal flow</h2></div><p>Primary and government sources anchor the market context. Startup-specific TAM remains assumption-driven and reviewable.</p></div><div className="market-table card"><header><span>Sector</span><span>Source signal</span><span>CAGR</span><span>Companies</span><span>Source</span></header>{marketSources.map((source) => <div key={source.id}><strong>{source.sector}</strong><p>{source.sourceMetric}</p><b>{source.cagr}%</b><span>{startups.filter((startup) => startup.sector === source.sector).length}</span><a href={source.url} target="_blank" rel="noreferrer">{source.publisher}<ArrowUpRight size={13} /></a></div>)}</div></div>;
 }
 
 function MessagesView({ viewer, onAuth }: { viewer: Viewer | null; onAuth: () => void }) {
   type Contact = { id: string; name: string; role: Role; headline: string; company: string; color: string; sectors?: string[]; stages?: string[]; locations?: string[] };
-  type Conversation = { id: string; inboxTier: "primary" | "secondary" | "request"; lastMessageAt: number; other: Contact; preview: string; unreadCount: number };
+  type Conversation = { id: string; inboxTier: "primary" | "secondary" | "request"; routingScore?: number; routingReasons?: string[]; routingModelVersion?: string; lastMessageAt: number; other: Contact; preview: string; unreadCount: number };
   type MessageItem = { id: string; senderProfileId: string; recipientProfileId: string; senderName: string; body: string; createdAt: number };
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [messages, setMessages] = useState<MessageItem[]>([]);
   const [activeId, setActiveId] = useState("");
   const [target, setTarget] = useState<Contact | null>(null);
-  const [tier, setTier] = useState<"primary" | "secondary" | "request">("primary");
+  const [tier, setTier] = useState<"all" | "unread" | "primary" | "secondary" | "request">(viewer?.role === "founder" ? "all" : "primary");
   const [draft, setDraft] = useState("");
   const [composing, setComposing] = useState(false);
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("Loading conversations…");
   const [meetingInvestor, setMeetingInvestor] = useState<Investor | null>(null);
-  const [call, setCall] = useState<{ target: Contact; mode: "voice" | "video"; incomingCall?: CallPayload } | null>(null);
+  const [call, setCall] = useState<{ target: Contact; mode: "voice" | "video" } | null>(null);
   const loadInbox = useCallback(async () => {
     const response = await authenticatedFetch("/api/messages");
     if (!response.ok) return;
@@ -704,33 +804,24 @@ function MessagesView({ viewer, onAuth }: { viewer: Viewer | null; onAuth: () =>
     const kickoff = window.setTimeout(() => { setTarget(contact); setComposing(false); setMessages([]); window.localStorage.removeItem("innovestart-message-recipient"); const existing = conversations.find((item) => item.other.id === contact.id); setActiveId(existing?.id ?? ""); }, 0);
     return () => window.clearTimeout(kickoff);
   }, [contacts, conversations, viewer]);
-  useEffect(() => {
-    if (!viewer) return;
-    const poll = async () => {
-      const response = await authenticatedFetch("/api/calls"); if (!response.ok) return;
-      const payload = await response.json() as { incoming?: CallPayload | null };
-      if (payload.incoming && !call) {
-        const caller = contacts.find((item) => item.id === payload.incoming?.callerProfileId);
-        if (caller) setCall({ target: caller, mode: payload.incoming.mode, incomingCall: payload.incoming });
-      }
-    };
-    poll(); const timer = window.setInterval(poll, 5_000); return () => window.clearInterval(timer);
-  }, [call, contacts, viewer]);
   if (!viewer) return <GatedView icon={<MessageCircle size={30} />} title="Turn interest into a conversation." body="Sign in to message founders, ask useful questions, and keep every promising connection in one place." onAuth={onAuth} />;
-  const filteredConversations = conversations.filter((item) => item.inboxTier === tier);
+  const filteredConversations = viewer.role === "founder"
+    ? conversations.filter((item) => tier === "unread" ? item.unreadCount > 0 : true)
+    : conversations.filter((item) => item.inboxTier === tier);
   const activeConversation = conversations.find((item) => item.id === activeId);
   const activeContact = target ?? activeConversation?.other ?? null;
   const send = async () => {
     if (!draft.trim() || !activeContact) return;
     const body = draft.trim(); setDraft("");
     const response = await authenticatedFetch("/api/messages", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ conversationId: activeId || undefined, recipientProfileId: activeContact.id, body }) });
-    const payload = await response.json() as { message?: MessageItem & { conversationId: string }; error?: string; inboxTier?: string };
+    const payload = await response.json() as { message?: MessageItem & { conversationId: string }; error?: string; inboxTier?: string; routing?: { score?: number; reasons?: string[] } };
     if (!response.ok || !payload.message) { setStatus(payload.error || "Unable to send the message."); setDraft(body); return; }
-    setMessages((current) => [...current, payload.message!]); setActiveId(payload.message.conversationId); setTarget(activeContact); setStatus(`Delivered to ${payload.inboxTier ?? "primary"} inbox`); await loadInbox();
+    setMessages((current) => [...current, payload.message!]); setActiveId(payload.message.conversationId); setTarget(activeContact); setStatus(viewer.role === "investor" ? "Delivered directly to the founder" : `Routed to ${payload.inboxTier ?? "primary"} · ${payload.routing?.score ?? 0}% thesis fit`); await loadInbox();
   };
   const availableContacts = contacts.filter((item) => item.role !== viewer.role && `${item.name} ${item.company} ${item.headline}`.toLowerCase().includes(query.toLowerCase()));
-  const investorFor = activeContact?.role === "investor" ? investors.find((item) => item.profileId === activeContact.id) ?? null : null;
-  return <div className="workspace-page"><div className="page-title-row"><div><span className="eyebrow">PRIVATE & FOCUSED</span><h1>Messages</h1><p>Real two-way conversations, protected by relevance-aware routing.</p></div><button className="primary-wide" onClick={() => setComposing(true)}><Plus size={15} /> New message</button></div><section className="messages-shell card"><aside className="chat-list"><div className="inbox-tier-tabs">{(["primary", "secondary", "request"] as const).map((item) => <button key={item} className={tier === item ? "active" : ""} onClick={() => setTier(item)}>{item === "request" ? "Requests" : `${item[0].toUpperCase()}${item.slice(1)}`}<b>{conversations.filter((chat) => chat.inboxTier === item).length}</b></button>)}</div><div className="chat-list-head"><strong>Inbox</strong><button onClick={() => setComposing(true)}><Search size={16} /></button></div>{filteredConversations.map((item) => <button className={`chat-row ${activeId === item.id ? "active" : ""}`} key={item.id} onClick={() => { setActiveId(item.id); setTarget(item.other); }}><Avatar initials={initials(item.other.name)} color={item.other.color} /><span><strong>{item.other.name}</strong><small>{item.preview}</small></span><time>{relativeTimeLabel(item.lastMessageAt)}{item.unreadCount > 0 && <b>{item.unreadCount}</b>}</time></button>)}{!filteredConversations.length && <p className="empty-inbox">No {tier} conversations yet.</p>}</aside><div className="conversation">{activeContact ? <><header><Avatar initials={initials(activeContact.name)} color={activeContact.color} /><div><strong>{activeContact.name}</strong><span><i /> {activeContact.headline || activeContact.company}</span></div><div className="call-actions"><button aria-label="Start voice call" onClick={() => setCall({ target: activeContact, mode: "voice" })}><Phone size={17} /></button><button aria-label="Start video call" onClick={() => setCall({ target: activeContact, mode: "video" })}><Camera size={18} /></button>{investorFor && <button aria-label="Schedule meeting" onClick={() => setMeetingInvestor(investorFor)}><CalendarDays size={18} /></button>}</div></header><div className="message-thread">{messages.length > 0 && <div className="message-day">PRIVATE THREAD</div>}{messages.map((item) => <div className={`message ${item.senderProfileId === viewer.id ? "outgoing" : "incoming"}`} key={item.id}>{item.body}<time>{new Intl.DateTimeFormat("en-IN", { hour: "numeric", minute: "2-digit" }).format(item.createdAt)}</time></div>)}{!messages.length && <div className="conversation-empty"><MessageCircle size={30} /><h3>Start with context.</h3><p>Explain why the company or thesis is relevant. The inbox router will place the first message automatically.</p></div>}</div><div className="message-delivery-note">{status}</div><div className="message-composer"><button><Plus size={18} /></button><input value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") send(); }} placeholder={`Message ${activeContact.name}…`} /><button className="send-button" onClick={send}><Send size={17} /></button></div></> : <div className="conversation-empty full"><MessageCircle size={34} /><h3>Select a conversation</h3><p>Or start a new founder–investor introduction.</p></div>}</div></section>{composing && <div className="new-message-popover card"><div><strong>New conversation</strong><button onClick={() => setComposing(false)}><X size={16} /></button></div><label><Search size={15} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={`Search ${viewer.role === "founder" ? "investors" : "startups"}…`} /></label><div>{availableContacts.slice(0, 30).map((contact) => <button key={contact.id} onClick={() => { setTarget(contact); setMessages([]); setActiveId(conversations.find((item) => item.other.id === contact.id)?.id ?? ""); setComposing(false); }}><Avatar initials={initials(contact.name)} color={contact.color} /><span><strong>{contact.name}</strong><small>{contact.headline || contact.company}</small></span><ArrowUpRight size={15} /></button>)}</div></div>}{meetingInvestor && <ScheduleMeetingModal investor={meetingInvestor} conversationId={activeId} onClose={() => setMeetingInvestor(null)} />}{call && <CallModal target={call.target} mode={call.mode} incomingCall={call.incomingCall} conversationId={activeId} onClose={() => setCall(null)} />}</div>;
+  const investorFor = activeContact?.role === "investor" ? investors.find((item) => item.profileId === activeContact.id) ?? { profileId: activeContact.id, name: activeContact.name } : null;
+  const inboxTabs = viewer.role === "founder" ? (["all", "unread"] as const) : (["primary", "secondary", "request"] as const);
+  return <div className="workspace-page"><div className="page-title-row"><div><span className="eyebrow">{viewer.role === "investor" ? "RELEVANCE-RANKED INBOX" : "FOUNDER INBOX"}</span><h1>Messages</h1><p>{viewer.role === "investor" ? "Protect your attention with explainable Primary, Secondary and Request routing." : "Every investor message arrives directly—no hidden request folders or relevance tiers."}</p></div><button className="primary-wide" onClick={() => setComposing(true)}><Plus size={15} /> New message</button></div><section className="messages-shell card"><aside className="chat-list"><div className="inbox-tier-tabs">{inboxTabs.map((item) => <button key={item} className={tier === item ? "active" : ""} onClick={() => setTier(item)}>{item === "request" ? "Requests" : `${item[0].toUpperCase()}${item.slice(1)}`}<b>{item === "all" ? conversations.length : item === "unread" ? conversations.filter((chat) => chat.unreadCount > 0).length : conversations.filter((chat) => chat.inboxTier === item).length}</b></button>)}</div><div className="chat-list-head"><strong>Inbox</strong><button onClick={() => setComposing(true)}><Search size={16} /></button></div>{filteredConversations.map((item) => <button className={`chat-row ${activeId === item.id ? "active" : ""}`} key={item.id} onClick={() => { setActiveId(item.id); setTarget(item.other); }}><Avatar initials={initials(item.other.name)} color={item.other.color} /><span><strong>{item.other.name}</strong><small>{item.preview}</small></span><time>{relativeTimeLabel(item.lastMessageAt)}{item.unreadCount > 0 && <b>{item.unreadCount}</b>}</time></button>)}{!filteredConversations.length && <p className="empty-inbox">No {tier} conversations yet.</p>}</aside><div className="conversation">{activeContact ? <><header><Avatar initials={initials(activeContact.name)} color={activeContact.color} /><div><strong>{activeContact.name}</strong><span><i /> {activeContact.headline || activeContact.company}</span></div><div className="call-actions"><button aria-label="Start voice call" onClick={() => setCall({ target: activeContact, mode: "voice" })}><Phone size={17} /></button><button aria-label="Start video call" onClick={() => setCall({ target: activeContact, mode: "video" })}><Camera size={18} /></button>{investorFor && <button aria-label="Schedule meeting" onClick={() => setMeetingInvestor(investorFor)}><CalendarDays size={18} /></button>}</div></header>{viewer.role === "investor" && activeConversation?.routingScore ? <div className="routing-explanation"><Sparkles size={15} /><span><strong>{activeConversation.routingScore}% relevance · {activeConversation.inboxTier}</strong><small>{activeConversation.routingReasons?.slice(0, 2).join(" · ")}</small></span></div> : null}<div className="message-thread">{messages.length > 0 && <div className="message-day">PRIVATE THREAD</div>}{messages.map((item) => <div className={`message ${item.senderProfileId === viewer.id ? "outgoing" : "incoming"}`} key={item.id}>{item.body}<time>{new Intl.DateTimeFormat("en-IN", { hour: "numeric", minute: "2-digit" }).format(item.createdAt)}</time></div>)}{!messages.length && <div className="conversation-empty"><MessageCircle size={30} /><h3>Start with context.</h3><p>{viewer.role === "founder" ? "Explain why your company fits this investor. Innovestart will route the first message using the match model." : "Investor outreach is delivered directly to the founder’s inbox."}</p></div>}</div><div className="message-delivery-note">{status}</div><div className="message-composer"><button><Plus size={18} /></button><input value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") send(); }} placeholder={`Message ${activeContact.name}…`} /><button className="send-button" onClick={send}><Send size={17} /></button></div></> : <div className="conversation-empty full"><MessageCircle size={34} /><h3>Select a conversation</h3><p>Or start a new founder–investor introduction.</p></div>}</div></section>{composing && <div className="new-message-popover card"><div><strong>New conversation</strong><button onClick={() => setComposing(false)}><X size={16} /></button></div><label><Search size={15} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={`Search ${viewer.role === "founder" ? "investors" : "startups"}…`} /></label><div>{availableContacts.slice(0, 30).map((contact) => <button key={contact.id} onClick={() => { setTarget(contact); setMessages([]); setActiveId(conversations.find((item) => item.other.id === contact.id)?.id ?? ""); setComposing(false); }}><Avatar initials={initials(contact.name)} color={contact.color} /><span><strong>{contact.name}</strong><small>{contact.headline || contact.company}</small></span><ArrowUpRight size={15} /></button>)}</div></div>}{meetingInvestor && <ScheduleMeetingModal investor={meetingInvestor} conversationId={activeId} onClose={() => setMeetingInvestor(null)} />}{call && <CallModal target={call.target} mode={call.mode} conversationId={activeId} onClose={() => setCall(null)} />}</div>;
 }
 
 function CallModal({ target, mode, incomingCall, conversationId, onClose }: { target: { id: string; name: string; color: string }; mode: "voice" | "video"; incomingCall?: CallPayload; conversationId?: string; onClose: () => void }) {
@@ -808,31 +899,37 @@ function CallModal({ target, mode, incomingCall, conversationId, onClose }: { ta
   };
   const toggleMute = () => { stream.current?.getAudioTracks().forEach((track) => { track.enabled = muted; }); setMuted((current) => !current); };
   const toggleCamera = () => { stream.current?.getVideoTracks().forEach((track) => { track.enabled = cameraOff; }); setCameraOff((current) => !current); };
-  return <div className="call-overlay"><section className={`call-panel ${mode}`}><div className="call-remote"><video ref={remoteVideo} autoPlay playsInline /><div className="call-identity"><Avatar initials={initials(target.name)} color={target.color} size="large" /><h2>{target.name}</h2><p>{state}</p></div></div><video className="call-local" ref={localVideo} autoPlay playsInline muted /><div className="call-controls">{!started ? <>{incomingCall && <button className="decline" onClick={() => finish("declined")}><PhoneOff size={20} /></button>}<button className="accept" onClick={begin}>{incomingCall ? <Phone size={20} /> : mode === "video" ? <Camera size={20} /> : <Phone size={20} />}<span>{incomingCall ? "Accept" : "Start"}</span></button></> : <><button className={muted ? "off" : ""} onClick={toggleMute}>{muted ? <MicOff size={20} /> : <Mic size={20} />}</button>{mode === "video" && <button className={cameraOff ? "off" : ""} onClick={toggleCamera}>{cameraOff ? <VideoOff size={20} /> : <Video size={20} />}</button>}<button className="decline" onClick={() => finish()}><PhoneOff size={21} /></button></>}</div><small>Beta peer-to-peer call · camera and microphone stay in your browser</small></section></div>;
+  return <div className="call-overlay"><section className={`call-panel ${mode}`}><div className="call-remote"><video ref={remoteVideo} autoPlay playsInline /><div className={`call-identity ${started ? "connected" : "waiting"}`}><Avatar initials={initials(target.name)} color={target.color} size="large" /><span><h2>{target.name}</h2><p>{state}</p></span></div></div><video className="call-local" ref={localVideo} autoPlay playsInline muted /><div className="call-controls">{!started ? <>{incomingCall && <button className="decline" aria-label="Decline call" onClick={() => finish("declined")}><PhoneOff size={20} /></button>}<button className="accept" onClick={begin}>{incomingCall ? <Phone size={20} /> : mode === "video" ? <Camera size={20} /> : <Phone size={20} />}<span>{incomingCall ? "Accept" : "Start"}</span></button></> : <><button className={muted ? "off" : ""} aria-label={muted ? "Unmute microphone" : "Mute microphone"} onClick={toggleMute}>{muted ? <MicOff size={20} /> : <Mic size={20} />}</button>{mode === "video" && <button className={cameraOff ? "off" : ""} aria-label={cameraOff ? "Turn camera on" : "Turn camera off"} onClick={toggleCamera}>{cameraOff ? <VideoOff size={20} /> : <Video size={20} />}</button>}<button className="decline" aria-label="End call" onClick={() => finish()}><PhoneOff size={21} /></button></>}</div><small><i /> WebRTC peer-to-peer media · encrypted in transit</small></section></div>;
 }
 
-function NetworkView({ viewer, onAuth, onMessage }: { viewer: Viewer | null; onAuth: () => void; onMessage: (profileId: string) => void }) {
-  const [connected, setConnected] = useState<Set<string>>(new Set(["rhea"]));
-  const [networkTab, setNetworkTab] = useState<"Suggested" | "Connections" | "Following">("Suggested");
+function NetworkView({ viewer, onAuth, onMessage, onStartup }: { viewer: Viewer | null; onAuth: () => void; onMessage: (profileId: string) => void; onStartup: (startup: Startup) => void }) {
+  const [connected, setConnected] = useState<Set<string>>(new Set(["demo-investor-01", "demo-founder-01"]));
+  const [section, setSection] = useState<"founders" | "investors">(viewer?.role === "investor" ? "founders" : "investors");
   const [sector, setSector] = useState("All sectors");
   const [stage, setStage] = useState("All rounds");
   const [location, setLocation] = useState("All locations");
   const [selected, setSelected] = useState<Investor | null>(null);
-  if (!viewer) return <GatedView icon={<Users size={30} />} title="Build a circle that opens doors." body="Sign in to follow investors, meet founders, and turn shared interests into warm introductions." onAuth={onAuth} />;
-  const base = networkTab === "Connections" ? investors.filter((investor) => connected.has(investor.id)) : networkTab === "Following" ? investors.slice(0, 6) : investors;
-  const people = base.filter((investor) => (sector === "All sectors" || investor.sectors.includes(sector)) && (stage === "All rounds" || investor.stages.includes(stage)) && (location === "All locations" || investor.locations.includes(location)));
+  if (!viewer) return <GatedView icon={<Users size={30} />} title="Build a circle that opens doors." body="Sign in to explore founders and investors in separate, role-aware networks." onAuth={onAuth} />;
+  const sectorOptions = [{ value: "All sectors", label: "Every sector" }, ...Array.from(new Set(startups.map((item) => item.sector))).map((item) => ({ value: item, label: item }))];
+  const stageOptions = [{ value: "All rounds", label: "Every round" }, ...Array.from(new Set(startups.map((item) => item.stage))).map((item) => ({ value: item, label: item }))];
+  const locationOptions = [{ value: "All locations", label: "Every market" }, ...Array.from(new Set(startups.map((item) => item.location))).sort().map((item) => ({ value: item, label: item }))];
+  const filteredInvestors = investors.filter((investor) => (sector === "All sectors" || investor.sectors.includes(sector)) && (stage === "All rounds" || investor.stages.includes(stage)) && (location === "All locations" || investor.locations.includes(location)));
+  const filteredFounders = startupIntelligence.filter((startup) => (sector === "All sectors" || startup.sector === sector) && (stage === "All rounds" || startup.stage === stage) && (location === "All locations" || startup.location === location));
+  const investorMatches = new Map(recommendationsForFounder(viewer.id, 20).map((item) => [item.investor.profileId, item.match]));
+  const startupMatches = new Map(recommendationsForInvestor(viewer.id, 30).map((item) => [item.startup.startupId, item.match]));
   const toggleConnection = (id: string) => setConnected((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; });
-  return <div className="workspace-page"><div className="page-title-row"><div><span className="eyebrow">PEOPLE WORTH KNOWING</span><h1>Find your investor fit.</h1><p>Filter by sector, fundraising round, and geography—then inspect the actual portfolio and thesis.</p></div><div className="network-tabs">{(["Suggested", "Connections", "Following"] as const).map((tab) => <button key={tab} className={networkTab === tab ? "active" : ""} onClick={() => setNetworkTab(tab)}>{tab}{tab !== "Suggested" && <b>{tab === "Connections" ? connected.size : 6}</b>}</button>)}</div></div><section className="network-filter-bar card"><label><span>Startup area</span><select value={sector} onChange={(event) => setSector(event.target.value)}><option>All sectors</option>{Array.from(new Set(startups.map((item) => item.sector))).map((item) => <option key={item}>{item}</option>)}</select></label><label><span>Raising round</span><select value={stage} onChange={(event) => setStage(event.target.value)}><option>All rounds</option>{Array.from(new Set(startups.map((item) => item.stage))).map((item) => <option key={item}>{item}</option>)}</select></label><label><span>Geography</span><select value={location} onChange={(event) => setLocation(event.target.value)}><option>All locations</option>{Array.from(new Set(startups.map((item) => item.location))).sort().map((item) => <option key={item}>{item}</option>)}</select></label><strong>{people.length} matches</strong></section><div className="network-grid">{people.map((investor) => <article className="person-card card" key={investor.id}><button className="person-profile-hit" onClick={() => setSelected(investor)} aria-label={`View ${investor.name}'s investor profile`}><div className="person-cover" style={{ backgroundImage: `linear-gradient(135deg, ${investor.color}66, rgba(17,29,51,.45)), url(${investor.poster})` }} /><Avatar initials={investor.initials} color={investor.color} size="large" /><h2>{investor.name}</h2><p>{investor.role}</p><span className="thesis-label">CURRENT INVESTMENT FOCUS</span><strong className="thesis">{investor.thesis}</strong><div className="person-stat"><BriefcaseBusiness size={15} /><span><strong>{investor.portfolioStartupIds.length}</strong> visible portfolio companies · {investor.ticket}</span></div></button><div className="person-actions"><button className="secondary-button" onClick={() => setSelected(investor)}>View profile</button><button className={connected.has(investor.id) ? "connected-button" : "connect-button"} onClick={() => toggleConnection(investor.id)}>{connected.has(investor.id) ? <><Check size={15} /> Connected</> : <><UserPlus size={15} /> Connect</>}</button></div></article>)}</div>{!people.length && <div className="card empty-feed"><Users size={30} /><h3>No exact investor match yet</h3><p>Broaden one filter to surface more compatible people.</p></div>}{selected && <InvestorProfileModal investor={selected} onClose={() => setSelected(null)} onMessage={() => onMessage(selected.profileId)} />}</div>;
+  return <div className="workspace-page network-page"><div className="page-title-row"><div><span className="eyebrow">ROLE-AWARE NETWORK</span><h1>{section === "investors" ? "Capital, with the mandate visible." : "Founders, with the operating signal attached."}</h1><p>{section === "investors" ? "See the thesis, stage, cheque and portfolio before opening a profile." : "Filter companies by sector, round and market, then move directly into diligence or conversation."}</p></div><div className="network-tabs role-tabs">{(["founders", "investors"] as const).map((item) => <button key={item} className={section === item ? "active" : ""} onClick={() => setSection(item)}>{item === "founders" ? <Rocket size={15} /> : <CircleDollarSign size={15} />}{item[0].toUpperCase() + item.slice(1)}<b>{item === "founders" ? startups.length : investors.length}</b></button>)}</div></div><section className="network-filter-bar card"><ChoiceMenu label="Sector" icon={<Compass size={13} />} value={sector} options={sectorOptions} onChange={setSector} /><ChoiceMenu label="Funding stage" icon={<Target size={13} />} value={stage} options={stageOptions} onChange={setStage} /><ChoiceMenu label="Market" icon={<MapPin size={13} />} value={location} options={locationOptions} onChange={setLocation} /><strong><Sparkles size={14} /> {section === "investors" ? filteredInvestors.length : filteredFounders.length} visible matches</strong></section>{section === "investors" ? <div className="network-grid investor-network-grid">{filteredInvestors.map((investor) => { const intelligence = investorIntelligence.find((item) => item.profileId === investor.profileId)!; const match = investorMatches.get(investor.profileId); return <article className="person-card investor-card card" key={investor.id}><div className="person-cover" style={{ backgroundImage: `url(${investor.poster})` }} /><div className="investor-card-head"><Avatar initials={investor.initials} color={investor.color} size="large" /><span className={`routing-pill tier-${match?.inboxTier ?? "secondary"}`}>{match ? `${match.reciprocalScore}% fit` : "Investor"}</span></div><h2>{investor.name}</h2><p>{investor.role}</p><div className="thesis-front"><span>INVESTMENT THESIS</span><blockquote>{intelligence.thesis}</blockquote></div><div className="investor-criteria"><span>{investor.ticket}</span><span>{investor.stages.join(" / ")}</span><span>{intelligence.leadPreference}</span></div><div className="person-stat"><BriefcaseBusiness size={15} /><span><strong>{investor.portfolioStartupIds.length}</strong> portfolio companies · {intelligence.responseRate}% response rate</span></div><div className="person-actions"><button className="secondary-button" onClick={() => setSelected(investor)}>Open thesis</button><button className={connected.has(investor.profileId) ? "connected-button" : "connect-button"} onClick={() => toggleConnection(investor.profileId)}>{connected.has(investor.profileId) ? <><Check size={15} /> Connected</> : <><UserPlus size={15} /> Connect</>}</button></div></article>; })}</div> : <div className="founder-network-grid">{filteredFounders.map((record) => { const startup = startups.find((item) => item.id === record.startupId)!; const match = startupMatches.get(record.startupId); return <article className="founder-network-card card" key={record.startupId}><button className="founder-network-image" style={{ backgroundImage: `url(${startup.poster})` }} onClick={() => onStartup(startup)}><span>{record.stage}</span><strong>{startup.tagline}</strong></button><div className="founder-network-body"><div><StartupLogo startup={startup} /><span><h2>{record.name}</h2><p>{record.founderName} · {record.location}</p></span><div className={`match-score tier-${match?.inboxTier ?? "secondary"}`}><strong>{match?.reciprocalScore ?? 0}</strong><small>fit</small></div></div><p>{record.problem}</p><div className="founder-signal-row"><span>₹{record.arrCr} Cr ARR</span><span>{record.growthPercent}% growth</span><span>{record.customers} customers</span></div><footer><button className="secondary-button" onClick={() => onStartup(startup)}>View company</button>{viewer.role === "investor" && <button className="connect-button" onClick={() => onMessage(record.founderProfileId)}><MessageCircle size={15} /> Message founder</button>}</footer></div></article>; })}</div>}{section === "investors" && selected && <InvestorProfileModal investor={selected} onClose={() => setSelected(null)} onMessage={() => onMessage(selected.profileId)} />}</div>;
 }
 
 function InvestorProfileModal({ investor, onClose, onMessage }: { investor: Investor; onClose: () => void; onMessage: () => void }) {
   const [scheduling, setScheduling] = useState(false);
+  const intelligence = investorIntelligence.find((item) => item.profileId === investor.profileId)!;
   const portfolio = investor.portfolioStartupIds.map((id) => startups.find((startup) => startup.id === id)).filter((startup): startup is Startup => Boolean(startup));
   const matches = startups.filter((startup) => investor.sectors.includes(startup.sector) && investor.stages.includes(startup.stage)).slice(0, 6);
-  return <Modal onClose={onClose} wide><div className="investor-detail"><header style={{ backgroundImage: `linear-gradient(110deg, rgba(12,28,48,.92), rgba(12,28,48,.42)), url(${investor.poster})` }}><Avatar initials={investor.initials} color={investor.color} size="large" /><span className="eyebrow">VERIFIED DEMO INVESTOR</span><h1>{investor.name}</h1><p>{investor.role}</p><div><button className="primary-wide" onClick={onMessage}><MessageCircle size={16} /> Send a message</button><button className="secondary-button" onClick={() => setScheduling(true)}><CalendarCheck size={16} /> Schedule meeting</button></div></header><section><div className="investor-thesis"><span className="eyebrow">INVESTMENT MANDATE</span><h2>What {investor.name.split(" ")[0]} wants to back</h2><p>{investor.bio}</p><div className="detail-tags">{[...investor.sectors, ...investor.stages, ...investor.locations].map((item) => <span key={item}>{item}</span>)}</div><strong>Typical first ticket · {investor.ticket}</strong></div><div><span className="eyebrow">SELECT PORTFOLIO</span><h2>{portfolio.length ? "Companies supported" : "No disclosed investments yet"}</h2><div className="mini-startup-grid">{(portfolio.length ? portfolio : matches).map((startup) => <div key={startup.id}><StartupLogo startup={startup} size="small" /><span><strong>{startup.name}</strong><small>{startup.sector} · {startup.stage}</small></span></div>)}</div></div><div className="matched-startups"><span className="eyebrow">MATCHED NOW</span><h2>Startups aligned with this thesis</h2><div className="mini-startup-grid">{matches.map((startup) => <div key={startup.id}><StartupLogo startup={startup} size="small" /><span><strong>{startup.name}</strong><small>{startup.location} · {startup.stage}</small></span></div>)}</div></div></section></div>{scheduling && <ScheduleMeetingModal investor={investor} onClose={() => setScheduling(false)} />}</Modal>;
+  return <Modal onClose={onClose} wide><div className="thesis-sheet"><aside style={{ backgroundImage: `url(${investor.poster})` }}><div><Avatar initials={investor.initials} color={investor.color} size="large" /><span className="eyebrow">VERIFIED INVESTOR</span><h1>{investor.name}</h1><p>{investor.role}</p></div><div className="thesis-actions"><button className="primary-wide" onClick={onMessage}><MessageCircle size={16} /> Send message</button><button className="secondary-button" onClick={() => setScheduling(true)}><CalendarCheck size={16} /> Schedule</button></div></aside><main><section className="thesis-primary"><span className="eyebrow">INVESTMENT THESIS</span><h2>What {investor.name.split(" ")[0]} is actively looking for</h2><blockquote>{intelligence.thesis}</blockquote><div className="thesis-criteria-grid"><div><span>First cheque</span><strong>₹{intelligence.ticketMinCr}–₹{intelligence.ticketMaxCr} Cr</strong></div><div><span>Stage</span><strong>{intelligence.stages.join(" / ")}</strong></div><div><span>Geography</span><strong>{intelligence.locations.join(" · ")}</strong></div><div><span>Role</span><strong>{intelligence.leadPreference}</strong></div></div><div className="detail-tags">{[...intelligence.primarySectors, ...intelligence.adjacentSectors.slice(0, 2)].map((item) => <span key={item}>{item}</span>)}</div></section><section className="thesis-secondary"><div><span className="eyebrow">PORTFOLIO EVIDENCE</span><h3>{portfolio.length ? `${portfolio.length} disclosed companies` : "Building a first portfolio"}</h3><div className="mini-startup-grid">{(portfolio.length ? portfolio.slice(0, 4) : matches.slice(0, 4)).map((startup) => <div key={startup.id}><StartupLogo startup={startup} size="small" /><span><strong>{startup.name}</strong><small>{startup.sector} · {startup.stage}</small></span></div>)}</div></div><div className="investor-operating-data"><span className="eyebrow">OPERATING SIGNAL</span><p><strong>{intelligence.responseRate}%</strong> response rate</p><p><strong>₹{intelligence.availableCapitalCr} Cr</strong> available mandate</p><p><strong>{intelligence.businessModels.join(" · ")}</strong> preferred models</p></div></section></main></div>{scheduling && <ScheduleMeetingModal investor={investor} onClose={() => setScheduling(false)} />}</Modal>;
 }
 
-function ScheduleMeetingModal({ investor, onClose, conversationId }: { investor: Investor; onClose: () => void; conversationId?: string }) {
+function ScheduleMeetingModal({ investor, onClose, conversationId }: { investor: Pick<Investor, "profileId" | "name">; onClose: () => void; conversationId?: string }) {
   const [slots, setSlots] = useState<Array<{ id: string; startsAt: number; endsAt: number }>>([]);
   const [selected, setSelected] = useState("");
   const [notes, setNotes] = useState("");
@@ -862,20 +959,34 @@ function GatedView({ icon, title, body, onAuth }: { icon: React.ReactNode; title
   return <div className="gated-page"><div className="gated-glow" /><section className="gated-card card"><div className="gated-icon">{icon}</div><span className="eyebrow">MEMBERS ONLY</span><h1>{title}</h1><p>{body}</p><button className="google-button" onClick={onAuth}><Mail size={16} /> Sign in with email</button><small>Real member accounts are free during early access.</small></section></div>;
 }
 
-function AuthModal({ role, setRole, initialMode, onClose, onAuthenticated }: { role: Role; setRole: (role: Role) => void; initialMode: AuthMode; onClose: () => void; onAuthenticated: () => Promise<void> }) {
-  const [mode, setMode] = useState<AuthMode>(initialMode);
-  const [displayName, setDisplayName] = useState("");
+function AuthModal({ onClose, onAuthenticated }: { onClose: () => void; onAuthenticated: () => Promise<void> }) {
+  type DemoPersona = { id: string; email: string; password: string; displayName: string; role: Role; headline: string; company: string; scenario: string; featured: boolean };
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+  const [personas, setPersonas] = useState<DemoPersona[]>([]);
+  const [personaRole, setPersonaRole] = useState<Role>("founder");
+  const [showAll, setShowAll] = useState(false);
 
-  const switchMode = (next: AuthMode) => {
-    setMode(next);
+  useEffect(() => {
+    fetch("/api/demo-auth").then((response) => response.json()).then((payload: { accounts?: DemoPersona[] }) => setPersonas(payload.accounts ?? [])).catch(() => undefined);
+  }, []);
+
+  const fillDemoLogin = (kind: keyof typeof DEMO_LOGINS) => {
+    const demo = DEMO_LOGINS[kind];
+    setEmail(demo.email);
+    setPassword(demo.password);
     setError("");
-    setMessage("");
-    setPassword("");
+    setMessage(`${demo.label} credentials are ready. Select Sign in securely.`);
+  };
+
+  const selectPersona = (persona: DemoPersona) => {
+    setEmail(persona.email);
+    setPassword(persona.password);
+    setError("");
+    setMessage(`${persona.displayName} selected · ${persona.scenario}`);
   };
 
   const submit = async (event: React.FormEvent) => {
@@ -884,48 +995,24 @@ function AuthModal({ role, setRole, initialMode, onClose, onAuthenticated }: { r
     setMessage("");
     setBusy(true);
     try {
-      if (mode === "signup") {
-        window.localStorage.setItem("innovestart-pending-role", role);
-        const { data, error: signUpError } = await supabase.auth.signUp({
-          email: email.trim(),
-          password,
-          options: {
-            data: { display_name: displayName.trim(), role },
-            emailRedirectTo: window.location.origin,
-          },
-        });
-        if (signUpError) throw signUpError;
-        if (data.session) await onAuthenticated();
-        else setMessage("Account created. Check your inbox and click the verification link, then sign in here.");
-      } else if (mode === "signin") {
-        const { error: signInError } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
-        if (signInError) throw signInError;
-        await onAuthenticated();
-      } else if (mode === "forgot") {
-        const { error: resetError } = await supabase.auth.resetPasswordForEmail(email.trim(), {
-          redirectTo: `${window.location.origin}/?reset=1`,
-        });
-        if (resetError) throw resetError;
-        setMessage("Password reset email sent. Open the link in that email to choose a new password.");
-      } else {
-        const { error: updateError } = await supabase.auth.updateUser({ password });
-        if (updateError) throw updateError;
-        setMessage("Your password has been updated securely.");
-        window.history.replaceState({}, "", window.location.pathname);
-        await onAuthenticated();
-      }
+      const response = await fetch("/api/demo-auth", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email: email.trim(), password }),
+      });
+      const payload = await response.json() as { error?: string };
+      if (response.status === 404) throw new Error("Choose one of the 50 Innovestart demo identities.");
+      if (!response.ok) throw new Error(payload.error || "Demo sign-in could not be completed.");
+      await onAuthenticated();
     } catch (caught) {
-      const raw = caught instanceof Error ? caught.message : "Authentication could not be completed. Please try again.";
-      setError(/rate limit|too many requests|email.*exceeded/i.test(raw) ? "Supabase’s demo mailer has reached its 2-emails-per-hour limit. Sign in if you already verified, or try again after the hour resets. Custom SMTP removes this demo bottleneck." : raw);
+      setError(caught instanceof Error ? caught.message : "Authentication could not be completed. Please try again.");
     } finally {
       setBusy(false);
     }
   };
 
-  const heading = mode === "signup" ? "Create your account." : mode === "forgot" ? "Reset your password." : mode === "reset" ? "Choose a new password." : "Welcome back.";
-  const intro = mode === "signup" ? "Join founders and investors building what comes next." : mode === "forgot" ? "We’ll email you a secure recovery link." : mode === "reset" ? "Use at least eight characters for your new password." : "Sign in to post, upload, comment, and connect.";
-
-  return <Modal onClose={onClose} wide><div className="auth-layout"><section className="auth-story"><Logo /><span className="auth-kicker"><Sparkles size={14} /> FOUNDERS × INVESTORS</span><h2>The right idea<br />deserves the<br /><em>right room.</em></h2><p>Watch the story. Ask a better question. Meet the person who can help move it forward.</p><div className="auth-proof"><div className="proof-avatars"><Avatar initials="RM" color="#ff8064" size="small" /><Avatar initials="KS" color="#4f6ff3" size="small" /><Avatar initials="LI" color="#31b782" size="small" /></div><div><strong>Secure Supabase identity</strong><span>Your posts and uploads stay attached to you</span></div></div></section><section className="auth-form"><span className="auth-step">WELCOME TO INNOVESTART</span><h1>{heading}</h1><p>{intro}</p>{mode !== "forgot" && mode !== "reset" && <div className="auth-mode-tabs"><button type="button" className={mode === "signin" ? "active" : ""} onClick={() => switchMode("signin")}>Sign in</button><button type="button" className={mode === "signup" ? "active" : ""} onClick={() => switchMode("signup")}>Create account</button></div>}{mode === "signup" && <div className="role-switch auth-role-switch"><button type="button" className={role === "investor" ? "active" : ""} onClick={() => setRole("investor")}><CircleDollarSign size={19} /><span><strong>I&apos;m an investor</strong><small>Discover & connect</small></span>{role === "investor" && <Check size={15} />}</button><button type="button" className={role === "founder" ? "active" : ""} onClick={() => setRole("founder")}><Rocket size={19} /><span><strong>I&apos;m a founder</strong><small>Share & grow</small></span>{role === "founder" && <Check size={15} />}</button></div>}<form className="auth-email-form" onSubmit={submit}>{mode === "signup" && <label className="auth-field"><span>Your name</span><input value={displayName} onChange={(event) => setDisplayName(event.target.value)} autoComplete="name" placeholder="Adyanta Dubey" required maxLength={80} /></label>}{mode !== "reset" && <label className="auth-field"><span>Email address</span><input type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" placeholder="you@company.com" required /></label>}{mode !== "forgot" && <label className="auth-field"><span>{mode === "reset" ? "New password" : "Password"}</span><input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete={mode === "signin" ? "current-password" : "new-password"} placeholder="At least 8 characters" required minLength={8} /></label>}{error && <p className="auth-alert auth-error" role="alert">{error}</p>}{message && <p className="auth-alert auth-message" role="status"><BadgeCheck size={15} />{message}</p>}<button className="primary-wide auth-submit" disabled={busy || (mode === "signup" && !displayName.trim())}>{busy ? "Please wait…" : mode === "signup" ? "Create my account" : mode === "forgot" ? "Send reset link" : mode === "reset" ? "Update password" : "Sign in securely"}</button></form>{mode === "signin" && <button className="auth-link-button" onClick={() => switchMode("forgot")}>Forgot your password?</button>}{(mode === "forgot" || mode === "reset") && <button className="auth-link-button" onClick={() => switchMode("signin")}>Back to sign in</button>}<div className="demo-note secure-note"><BadgeCheck size={14} /><span><strong>Protected by Supabase Auth</strong> Passwords are hashed and never stored by Innovestart.</span></div><p className="auth-terms">By continuing, you agree to our Terms and Privacy Policy.</p></section></div></Modal>;
+  const visiblePersonas = personas.filter((persona) => persona.role === personaRole && (showAll || persona.featured));
+  return <Modal onClose={onClose} wide><div className="auth-layout auth-2"><section className="auth-story"><Logo /><span className="auth-kicker"><Sparkles size={14} /> 50 TESTABLE IDENTITIES</span><h2>Test the network<br />from every side.</h2><p>Each identity has structured sector, stage, market, cheque and portfolio information for real routing and recommendation scenarios.</p><div className="auth-proof"><div className="proof-avatars"><Avatar initials="MJ" color="#65d6a6" size="small" /><Avatar initials="RM" color="#f3f1ea" size="small" /><Avatar initials="AM" color="#78838f" size="small" /></div><div><strong>30 founders · 20 investors</strong><span>Persistent messages, meetings and role permissions</span></div></div></section><section className="auth-form"><span className="auth-step">SCENARIO ACCESS</span><h1>Choose a test identity.</h1><p>Featured accounts cover the main routing cases. Open all accounts to inspect the complete synthetic network.</p><div className="persona-role-tabs"><button className={personaRole === "founder" ? "active" : ""} onClick={() => setPersonaRole("founder")}><Rocket size={15} /> Founders <b>30</b></button><button className={personaRole === "investor" ? "active" : ""} onClick={() => setPersonaRole("investor")}><CircleDollarSign size={15} /> Investors <b>20</b></button></div><div className="persona-list">{visiblePersonas.map((persona) => <button type="button" className={email === persona.email ? "selected" : ""} key={persona.id} onClick={() => selectPersona(persona)}><Avatar initials={initials(persona.displayName)} color={persona.role === "founder" ? "#2a6954" : "#465363"} size="small" /><span><strong>{persona.displayName}</strong><small>{persona.company} · {persona.scenario}</small></span>{email === persona.email ? <Check size={15} /> : <ArrowUpRight size={15} />}</button>)}</div><button className="show-all-personas" type="button" onClick={() => setShowAll((current) => !current)}>{showAll ? "Show featured scenarios" : `Browse all ${personaRole === "founder" ? 30 : 20} accounts`}</button>{!personas.length && <div className="demo-account-grid" aria-label="Primary demo accounts"><button type="button" onClick={() => fillDemoLogin("founder")}><span className="demo-account-icon founder"><Rocket size={15} /></span><span><strong>Founder demo</strong><small>{DEMO_LOGINS.founder.email}</small></span></button><button type="button" onClick={() => fillDemoLogin("investor")}><span className="demo-account-icon investor"><CircleDollarSign size={15} /></span><span><strong>Investor demo</strong><small>{DEMO_LOGINS.investor.email}</small></span></button></div>}<form className="auth-email-form compact-auth" onSubmit={submit}><label className="auth-field"><span>Demo email</span><input type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" placeholder="Choose an identity above" required /></label><label className="auth-field"><span>Password</span><input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" placeholder="Filled automatically" required minLength={8} /></label>{error && <p className="auth-alert auth-error" role="alert">{error}</p>}{message && <p className="auth-alert auth-message" role="status"><BadgeCheck size={15} />{message}</p>}<button className="primary-wide auth-submit" disabled={busy}>{busy ? "Opening workspace…" : "Enter Innovestart"}</button></form><div className="demo-note secure-note"><BadgeCheck size={14} /><span><strong>Server-validated demo access</strong>All 50 identities use expiring HttpOnly sessions. Demo credentials are intentionally visible.</span></div></section></div></Modal>;
 }
 
 function ProfileModal({ viewer, required, onClose, onSave }: { viewer: Viewer; required: boolean; onClose: () => void; onSave: (draft: ProfileDraft) => Promise<boolean> }) {
@@ -971,14 +1058,12 @@ function ComposerModal({ viewer, onClose, onSubmit }: { viewer: Viewer; onClose:
       if (!startResponse.ok || !startPayload.upload) throw new Error(startPayload.error || "Unable to start the upload.");
       uploadId = startPayload.upload.id;
       const chunkSize = startPayload.upload.chunkSize;
-      const accessToken = await getSupabaseAccessToken();
       for (let offset = 0, part = 0; offset < file.size; offset += chunkSize, part += 1) {
         const chunk = file.slice(offset, Math.min(file.size, offset + chunkSize));
         await new Promise<void>((resolve, reject) => {
           const request = new XMLHttpRequest();
           request.open("PUT", `/api/uploads?id=${encodeURIComponent(uploadId)}&part=${part}`);
           request.setRequestHeader("content-type", "application/octet-stream");
-          if (accessToken) request.setRequestHeader("authorization", `Bearer ${accessToken}`);
           request.upload.onprogress = (event) => { if (event.lengthComputable) setUploadProgress(Math.min(99, Math.round(((offset + event.loaded) / file.size) * 100))); };
           request.onload = () => request.status >= 200 && request.status < 300 ? resolve() : reject(new Error("A file part could not be uploaded."));
           request.onerror = () => reject(new Error("The upload was interrupted. Please try again."));
@@ -1008,5 +1093,5 @@ function ComposerModal({ viewer, onClose, onSubmit }: { viewer: Viewer; onClose:
 }
 
 function StartupModal({ startup, followed, onClose, onFollow, onMessage }: { startup: Startup; followed: boolean; onClose: () => void; onFollow: () => void; onMessage: () => void }) {
-  return <Modal onClose={onClose} wide><div className="startup-detail"><div className="startup-detail-hero" style={{ backgroundImage: `linear-gradient(90deg, rgba(6,30,21,.92), rgba(6,30,21,.3)), url(${startup.poster})` }}><StartupLogo startup={startup} size="large" /><span>{startup.sector} · {startup.stage}</span><h1>{startup.name}</h1><p>{startup.tagline}</p></div><div className="startup-detail-body"><div className="detail-main"><div className="detail-tags">{startup.tags.map((tag) => <span key={tag}>{tag}</span>)}</div><h2>Why now</h2><p>{startup.description}</p><div className="founder-note"><span className="quote-mark">“</span><p>We spent eighteen months inside customer operations before writing the first line of product. The problem is urgent, measurable, and ready for a different approach.</p><div><Avatar initials={startup.initials + "F"} color={startup.color} size="small" /><span><strong>{startup.name} founding team</strong><small>Verified founder profile</small></span></div></div></div><aside className="detail-sidebar"><div className="detail-metrics"><div><Target size={17} /><span>Current round</span><strong>{startup.ask}</strong></div><div><LineChart size={17} /><span>Traction</span><strong>{startup.growth}</strong></div><div><Users size={17} /><span>Team</span><strong>{startup.team}</strong></div><div><CalendarDays size={17} /><span>Founded</span><strong>{startup.founded}</strong></div></div><button className="primary-wide" onClick={onMessage}><Mail size={15} /> Request introduction</button><button className="secondary-button full-width" onClick={onFollow}>{followed ? <><Check size={15} /> Following</> : <><Plus size={15} /> Follow startup</>}</button><small className="verified-note"><BadgeCheck size={14} /> Identity and traction verified by Innovestart</small></aside></div></div></Modal>;
+  return <Modal onClose={onClose} wide><div className="startup-detail"><div className="startup-detail-hero" style={{ backgroundImage: `url(${startup.poster})` }}><StartupLogo startup={startup} size="large" /><span>{startup.sector} · {startup.stage}</span><h1>{startup.name}</h1><p>{startup.tagline}</p></div><div className="startup-detail-body"><div className="detail-main"><div className="detail-tags">{startup.tags.map((tag) => <span key={tag}>{tag}</span>)}</div><h2>Why now</h2><p>{startup.description}</p><div className="founder-note"><span className="quote-mark">“</span><p>We spent eighteen months inside customer operations before writing the first line of product. The problem is urgent, measurable, and ready for a different approach.</p><div><Avatar initials={startup.initials + "F"} color={startup.color} size="small" /><span><strong>{startup.name} founding team</strong><small>Verified founder profile</small></span></div></div></div><aside className="detail-sidebar"><div className="detail-metrics"><div><Target size={17} /><span>Current round</span><strong>{startup.ask}</strong></div><div><LineChart size={17} /><span>Traction</span><strong>{startup.growth}</strong></div><div><Users size={17} /><span>Team</span><strong>{startup.team}</strong></div><div><CalendarDays size={17} /><span>Founded</span><strong>{startup.founded}</strong></div></div><button className="primary-wide" onClick={onMessage}><Mail size={15} /> Request introduction</button><button className="secondary-button full-width" onClick={onFollow}>{followed ? <><Check size={15} /> Following</> : <><Plus size={15} /> Follow startup</>}</button><small className="verified-note"><BadgeCheck size={14} /> Identity and traction verified by Innovestart</small></aside></div></div></Modal>;
 }

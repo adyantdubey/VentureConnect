@@ -192,10 +192,16 @@ export const investors: Investor[] = investorSeeds.map(([id, name, role, firm, s
   };
 });
 
+const founderNames = [
+  "Mira Joshi", "Aarav Sethi", "Nikhil Rao", "Anya Bose", "Karan Gill", "Ira Menon", "Ritvik Shah", "Suhani Das", "Vihaan Reddy", "Aditi Khanna",
+  "Reyansh Kapoor", "Nandini Iyer", "Arnav Bhat", "Kiara Sen", "Dhruv Kulkarni", "Myra Joseph", "Yash Patel", "Avni Mehra", "Neil Fernandes", "Riya Chawla",
+  "Kabir Anand", "Tara Mukherjee", "Samar Jain", "Leher Desai", "Arjun Pillai", "Zoya Qureshi", "Devika Nair", "Rohan Basu", "Mehul Arora", "Sanya Thomas",
+] as const;
+
 export const demoMembers: DemoMember[] = [
   ...startups.map((startup, index) => ({
     id: startup.founderProfileId,
-    name: ["Mira Joshi", "Aarav Sethi", "Nikhil Rao", "Anya Bose", "Karan Gill"][index % 5],
+    name: founderNames[index],
     role: "founder" as const,
     headline: `Founder building ${startup.tagline.toLowerCase()}`,
     company: startup.name,
@@ -238,28 +244,72 @@ const bodies = [
   "We are looking for partners who understand the problem deeply and can help us build a durable company—not simply close a round.",
 ];
 
-export const videoPosts: Post[] = startups.map((startup, index) => ({
-  id: `video-story-${String(index + 1).padStart(2, "0")}`,
-  startupId: startup.id,
-  startup: startup.name,
-  logo: startup.initials,
-  logoColor: startup.color,
-  meta: `${startup.sector} · ${startup.location} · ${index + 1}h`,
-  headline: headlines[index % headlines.length],
-  body: `${startup.tagline} Meet the synthetic founding team and see the problem they are determined to solve.`,
-  tags: startup.tags,
-  mediaType: "video",
-  mediaUrl: ["/videos/founder-room.mp4", "/videos/startup-meeting.mp4", "/videos/team-brainstorm.mp4"][index % 3],
-  poster: startup.poster,
-  mediaLabel: `FOUNDER STORY · ${index + 1}/30`,
-  mediaTitle: startup.tagline,
-  duration: ["0:38", "1:06", "1:28", "0:52"][index % 4],
-  likes: 84 + index * 17,
-  shares: 4 + index * 3,
-  comments: index % 6 === 0 ? [{ id: `video-comment-${index}`, author: investors[index % investors.length].name, initials: investors[index % investors.length].initials, role: investors[index % investors.length].role, body: "Clear story and a thoughtful wedge. I would like to understand the next operating milestone.", time: `${index + 1}h` }] : [],
-  createdAt: NOW - index * 3_600_000,
-  sourceLabel: "Demo footage · synthetic company",
-}));
+type DemoVideo = {
+  mediaUrl: string;
+  sourceUrl: string;
+};
+
+// Keep demo footage remote so thirty real clips do not add several gigabytes to
+// the application bundle. Every item links back to its individual Pexels page.
+export const pexelsVideoCatalog: DemoVideo[] = [
+  { mediaUrl: "https://videos.pexels.com/video-files/5684385/5684385-hd_1080_1920_25fps.mp4", sourceUrl: "https://www.pexels.com/video/young-men-in-office-using-laptop-5684385/" },
+  { mediaUrl: "https://videos.pexels.com/video-files/6805175/6805175-uhd_4096_2160_25fps.mp4", sourceUrl: "https://www.pexels.com/video/a-young-man-working-with-a-computer-6805175/" },
+  { mediaUrl: "https://videos.pexels.com/video-files/7439783/7439783-uhd_2160_4096_25fps.mp4", sourceUrl: "https://www.pexels.com/video/video-of-people-working-in-the-office-7439783/" },
+  { mediaUrl: "https://videos.pexels.com/video-files/6563850/6563850-hd_1920_1080_25fps.mp4", sourceUrl: "https://www.pexels.com/video/people-working-in-the-office-6563850/" },
+  { mediaUrl: "https://videos.pexels.com/video-files/7180172/7180172-hd_1920_1080_25fps.mp4", sourceUrl: "https://www.pexels.com/video/start-up-meeting-7180172/" },
+  { mediaUrl: "https://videos.pexels.com/video-files/6804647/6804647-uhd_4096_2160_25fps.mp4", sourceUrl: "https://www.pexels.com/video/young-workers-in-tech-office-6804647/" },
+  { mediaUrl: "https://videos.pexels.com/video-files/7966579/7966579-uhd_3840_2160_25fps.mp4", sourceUrl: "https://www.pexels.com/video/people-working-in-the-office-7966579/" },
+  { mediaUrl: "https://videos.pexels.com/video-files/6325841/6325841-hd_1920_1080_25fps.mp4", sourceUrl: "https://www.pexels.com/video/people-working-together-6325841/" },
+  { mediaUrl: "https://videos.pexels.com/video-files/7148578/7148578-uhd_3840_2160_25fps.mp4", sourceUrl: "https://www.pexels.com/video/business-people-working-in-the-office-7148578/" },
+  { mediaUrl: "https://videos.pexels.com/video-files/6804114/6804114-uhd_4096_2160_25fps.mp4", sourceUrl: "https://www.pexels.com/video/programmers-at-work-6804114/" },
+  { mediaUrl: "https://videos.pexels.com/video-files/8853531/8853531-hd_1920_1080_24fps.mp4", sourceUrl: "https://www.pexels.com/video/man-safely-checking-the-installation-of-solar-panels-8853531/" },
+  { mediaUrl: "https://videos.pexels.com/video-files/32386527/13814779_3840_2160_100fps.mp4", sourceUrl: "https://www.pexels.com/video/advanced-solar-panel-manufacturing-process-32386527/" },
+  { mediaUrl: "https://videos.pexels.com/video-files/7593895/7593895-hd_1920_1080_25fps.mp4", sourceUrl: "https://www.pexels.com/video/a-man-making-a-presentation-on-the-whiteboard-7593895/" },
+  { mediaUrl: "https://videos.pexels.com/video-files/32386624/13814677_3840_2160_100fps.mp4", sourceUrl: "https://www.pexels.com/video/automated-warehouse-with-robotics-in-action-32386624/" },
+  { mediaUrl: "https://videos.pexels.com/video-files/6898026/6898026-hd_1920_1080_25fps.mp4", sourceUrl: "https://www.pexels.com/video/man-using-cellphone-while-holding-his-credit-card-6898026/" },
+  { mediaUrl: "https://videos.pexels.com/video-files/9573916/9573916-uhd_2160_4096_25fps.mp4", sourceUrl: "https://www.pexels.com/video/medical-technologists-working-in-a-laboratory-9573916/" },
+  { mediaUrl: "https://videos.pexels.com/video-files/6898014/6898014-hd_1920_1080_25fps.mp4", sourceUrl: "https://www.pexels.com/video/a-person-using-a-cellphone-to-make-an-online-purchase-6898014/" },
+  { mediaUrl: "https://videos.pexels.com/video-files/7669651/7669651-hd_1920_1080_25fps.mp4", sourceUrl: "https://www.pexels.com/video/cashless-transaction-7669651/" },
+  { mediaUrl: "https://videos.pexels.com/video-files/7535094/7535094-hd_1920_1080_25fps.mp4", sourceUrl: "https://www.pexels.com/video/a-person-holding-a-credit-card-and-a-cellphone-7535094/" },
+  { mediaUrl: "https://videos.pexels.com/video-files/7669661/7669661-hd_1920_1080_25fps.mp4", sourceUrl: "https://www.pexels.com/video/a-debit-card-swiped-in-a-payment-terminal-7669661/" },
+  { mediaUrl: "https://videos.pexels.com/video-files/7535099/7535099-hd_1920_1080_25fps.mp4", sourceUrl: "https://www.pexels.com/video/person-holding-cellphone-and-card-7535099/" },
+  { mediaUrl: "https://videos.pexels.com/video-files/5240898/5240898-hd_1920_1080_25fps.mp4", sourceUrl: "https://www.pexels.com/video/customer-transacting-payment-5240898/" },
+  { mediaUrl: "https://videos.pexels.com/video-files/35313954/14961313_2160_3840_50fps.mp4", sourceUrl: "https://www.pexels.com/video/women-using-phone-for-card-transaction-indoors-35313954/" },
+  { mediaUrl: "https://videos.pexels.com/video-files/6803583/6803583-uhd_4096_2160_25fps.mp4", sourceUrl: "https://www.pexels.com/video/four-men-working-in-an-office-6803583/" },
+  { mediaUrl: "https://videos.pexels.com/video-files/6804109/6804109-uhd_4096_2160_25fps.mp4", sourceUrl: "https://www.pexels.com/video/people-coding-on-computer-6804109/" },
+  { mediaUrl: "https://videos.pexels.com/video-files/8632604/8632604-uhd_3840_2160_25fps.mp4", sourceUrl: "https://www.pexels.com/video/people-working-at-the-office-8632604/" },
+  { mediaUrl: "https://videos.pexels.com/video-files/34182415/14490106_3840_2160_25fps.mp4", sourceUrl: "https://www.pexels.com/video/drone-technology-advancing-modern-farming-34182415/" },
+  { mediaUrl: "https://videos.pexels.com/video-files/5200865/5200865-uhd_3840_2160_30fps.mp4", sourceUrl: "https://www.pexels.com/video/aerial-shot-of-agricultural-farms-5200865/" },
+  { mediaUrl: "https://videos.pexels.com/video-files/34182418/14490142_3840_2160_25fps.mp4", sourceUrl: "https://www.pexels.com/video/aerial-drone-spraying-technology-on-farm-field-34182418/" },
+  { mediaUrl: "https://videos.pexels.com/video-files/6196141/6196141-uhd_3840_2160_30fps.mp4", sourceUrl: "https://www.pexels.com/video/drone-shot-of-farmland-6196141/" },
+];
+
+export const videoPosts: Post[] = startups.map((startup, index) => {
+  const footage = pexelsVideoCatalog[index];
+  return {
+    id: `video-story-${String(index + 1).padStart(2, "0")}`,
+    startupId: startup.id,
+    startup: startup.name,
+    logo: startup.initials,
+    logoColor: startup.color,
+    meta: `${startup.sector} · ${startup.location} · ${index + 1}h`,
+    headline: headlines[index % headlines.length],
+    body: `${startup.tagline} Meet the synthetic founding team and see the problem they are determined to solve.`,
+    tags: startup.tags,
+    mediaType: "video",
+    mediaUrl: footage.mediaUrl,
+    poster: startup.poster,
+    mediaLabel: `FOUNDER STORY · ${index + 1}/30`,
+    mediaTitle: startup.tagline,
+    duration: ["0:38", "1:06", "1:28", "0:52"][index % 4],
+    likes: 84 + index * 17,
+    shares: 4 + index * 3,
+    comments: index % 6 === 0 ? [{ id: `video-comment-${index}`, author: investors[index % investors.length].name, initials: investors[index % investors.length].initials, role: investors[index % investors.length].role, body: "Clear story and a thoughtful wedge. I would like to understand the next operating milestone.", time: `${index + 1}h` }] : [],
+    createdAt: NOW - index * 3_600_000,
+    sourceLabel: "Video on Pexels · synthetic company",
+    sourceUrl: footage.sourceUrl,
+  };
+});
 
 export const imagePosts: Post[] = Array.from({ length: 200 }, (_, index) => {
   const startup = startups[index % startups.length];

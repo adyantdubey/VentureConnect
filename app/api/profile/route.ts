@@ -22,9 +22,13 @@ export async function PATCH(request: Request) {
     locations?: string[];
   };
   const displayName = payload.displayName?.trim().slice(0, 80);
-  const role = payload.role === "investor" || payload.role === "founder" ? payload.role : null;
+  const requestedRole = payload.role === "investor" || payload.role === "founder" ? payload.role : null;
+  const role = profile.onboardingComplete ? profile.role : requestedRole;
   if (!displayName || !role) {
     return Response.json({ error: "Your name and member type are required." }, { status: 400 });
+  }
+  if (profile.onboardingComplete && requestedRole && requestedRole !== profile.role) {
+    return Response.json({ error: "Account roles are fixed after onboarding to protect permissions and inbox routing." }, { status: 403 });
   }
 
   await ensureDatabase();

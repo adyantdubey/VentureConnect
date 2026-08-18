@@ -1,5 +1,6 @@
 import { ensureDatabase, getD1 } from "../../../db";
 import { getCurrentMember } from "../../server/member";
+import { MATCH_MODEL_VERSION, matchByProfileIds } from "../../intelligence";
 
 type ProfileRow = {
   id: string;
@@ -16,6 +17,9 @@ type ProfileRow = {
 type ConversationRow = {
   id: string;
   inbox_tier: "primary" | "secondary" | "request";
+  routing_score: number;
+  routing_reason_json: string;
+  routing_model_version: string;
   last_message_at: number;
   other_id: string;
   display_name: string;
@@ -45,7 +49,7 @@ export async function GET(request: Request) {
     return Response.json({ messages: result.results.map((item) => ({ id: item.id, senderProfileId: item.sender_profile_id, recipientProfileId: item.recipient_profile_id, senderName: item.sender_name, body: item.body, createdAt: item.created_at, readAt: item.read_at })) });
   }
 
-  const conversations = await d1.prepare(`SELECT c.id, c.inbox_tier, c.last_message_at,
+  const conversations = await d1.prepare(`SELECT c.id, c.inbox_tier, c.routing_score, c.routing_reason_json, c.routing_model_version, c.last_message_at,
       p.id AS other_id, p.display_name, p.role, p.headline, p.company, p.avatar_color,
       (SELECT body FROM messages lm WHERE lm.conversation_id = c.id ORDER BY lm.created_at DESC LIMIT 1) AS preview,
       (SELECT COUNT(*) FROM messages um WHERE um.conversation_id = c.id AND um.recipient_profile_id = ? AND um.read_at IS NULL) AS unread_count
@@ -90,7 +94,10 @@ export async function POST(request: Request) {
 
   const founderId = member.role === "founder" ? member.id : recipient.id;
   const investorId = member.role === "investor" ? member.id : recipient.id;
-  const tier = member.role === "investor" ? "primary" : await calculateTier(founderId, recipient, d1);
+  const routing = member.role === "investor"
+    ? { tier: "primary" as const, score: 100, reasons: ["Investor-initiated outreach is delivered directly to the founder"], modelVersion: MATCH_MODEL_VERSION }
+    : await calculateRouting(founderId, investorId, recipient, d1);
+  const tier = routing.tier;
   const now = Date.now();
   if (!conversation) {
     conversation = await d1.prepare("SELECT id, founder_profile_id, investor_profile_id, inbox_tier FROM conversations WHERE founder_profile_id = ? AND investor_profile_id = ?")
@@ -103,8 +110,8 @@ export async function POST(request: Request) {
   }
   const conversationId = conversation?.id ?? `conversation-${crypto.randomUUID()}`;
   if (!conversation) {
-    await d1.prepare("INSERT INTO conversations (id, founder_profile_id, investor_profile_id, inbox_tier, last_message_at, created_at) VALUES (?, ?, ?, ?, ?, ?)")
-      .bind(conversationId, founderId, investorId, tier, now, now).run();
+    await d1.prepare("INSERT INTO conversations (id, founder_profile_id, investor_profile_id, inbox_tier, routing_score, routing_reason_json, routing_model_version, last_message_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .bind(conversationId, founderId, investorId, tier, routing.score, JSON.stringify(routing.reasons), routing.modelVersion, now, now).run();
   } else {
     await d1.prepare("UPDATE conversations SET inbox_tier = ?, last_message_at = ? WHERE id = ?")
       .bind(member.role === "investor" ? "primary" : conversation.inbox_tier, now, conversationId).run();
@@ -112,7 +119,14 @@ export async function POST(request: Request) {
   const messageId = `message-${crypto.randomUUID()}`;
   await d1.prepare("INSERT INTO messages (id, conversation_id, sender_profile_id, recipient_profile_id, body, created_at) VALUES (?, ?, ?, ?, ?, ?)")
     .bind(messageId, conversationId, member.id, recipientId, body, now).run();
-  return Response.json({ message: { id: messageId, conversationId, senderProfileId: member.id, recipientProfileId: recipientId, senderName: member.displayName, body, createdAt: now }, inboxTier: tier }, { status: 201 });
+  return Response.json({ message: { id: messageId, conversationId, senderProfileId: member.id, recipientProfileId: recipientId, senderName: member.displayName, body, createdAt: now }, inboxTier: tier, routing }, { status: 201 });
+}
+
+async function calculateRouting(founderId: string, investorId: string, investor: { sectors_json: string; stages_json: string; locations_json: string }, d1: ReturnType<typeof getD1>) {
+  const modelMatch = matchByProfileIds(founderId, investorId);
+  if (modelMatch) return { tier: modelMatch.inboxTier, score: modelMatch.investorProbability, reasons: [...modelMatch.reasons, ...modelMatch.concerns.slice(0, 1)], modelVersion: modelMatch.modelVersion };
+  const tier = await calculateTier(founderId, investor, d1);
+  return { tier, score: tier === "primary" ? 78 : tier === "secondary" ? 56 : 28, reasons: ["Fallback profile overlap routing was used for this member"], modelVersion: "profile-overlap-v1" };
 }
 
 async function calculateTier(founderId: string, investor: { sectors_json: string; stages_json: string; locations_json: string }, d1: ReturnType<typeof getD1>) {
@@ -135,5 +149,5 @@ function mapContact(row: ProfileRow) {
   return { id: row.id, name: row.display_name, role: row.role, headline: row.headline, company: row.company, color: row.avatar_color, sectors: parseList(row.sectors_json), stages: parseList(row.stages_json), locations: parseList(row.locations_json) };
 }
 function mapConversation(row: ConversationRow) {
-  return { id: row.id, inboxTier: row.inbox_tier, lastMessageAt: row.last_message_at, other: { id: row.other_id, name: row.display_name, role: row.role, headline: row.headline, company: row.company, color: row.avatar_color }, preview: row.preview ?? "Start the conversation", unreadCount: Number(row.unread_count) };
+  return { id: row.id, inboxTier: row.inbox_tier, routingScore: Number(row.routing_score ?? 0), routingReasons: parseList(row.routing_reason_json), routingModelVersion: row.routing_model_version, lastMessageAt: row.last_message_at, other: { id: row.other_id, name: row.display_name, role: row.role, headline: row.headline, company: row.company, color: row.avatar_color }, preview: row.preview ?? "Start the conversation", unreadCount: Number(row.unread_count) };
 }

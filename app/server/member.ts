@@ -1,5 +1,6 @@
-import { getSupabaseUser } from "../supabase-auth";
 import { ensureDatabase, getD1 } from "../../db";
+import { headers } from "next/headers";
+import { DEMO_SESSION_COOKIE, hashDemoToken, readCookie } from "./demo-accounts";
 
 export type MemberProfile = {
   id: string;
@@ -34,44 +35,22 @@ type ProfileRow = {
 };
 
 export async function getCurrentMember(options: { create?: boolean } = {}): Promise<MemberProfile | null> {
-  const identity = await getSupabaseUser();
-  if (!identity) return null;
+  void options;
   await ensureDatabase();
   const d1 = getD1();
-  let row = await d1
-    .prepare("SELECT id, email, display_name, role, headline, company, bio, avatar_color, sectors_json, stages_json, locations_json, portfolio_startup_ids_json, onboarding_complete FROM profiles WHERE id = ?")
-    .bind(identity.userId)
-    .first<ProfileRow>();
-
-  if (!row && options.create !== false) {
+  const requestHeaders = await headers();
+  const demoToken = readCookie(requestHeaders.get("cookie"), DEMO_SESSION_COOKIE);
+  if (demoToken) {
+    const tokenHash = await hashDemoToken(demoToken);
     const now = Date.now();
-    await d1
-      .prepare("INSERT INTO profiles (id, email, display_name, role, headline, company, bio, onboarding_complete, created_at, updated_at) VALUES (?, ?, ?, 'founder', '', '', '', 0, ?, ?)")
-      .bind(identity.userId, identity.email, identity.displayName, now, now)
-      .run();
-    row = {
-      id: identity.userId,
-      email: identity.email,
-      display_name: identity.displayName,
-      role: "founder",
-      headline: "",
-      company: "",
-      bio: "",
-      avatar_color: "#5567d8",
-      sectors_json: "[]",
-      stages_json: "[]",
-      locations_json: "[]",
-      portfolio_startup_ids_json: "[]",
-      onboarding_complete: 0,
-    };
-  } else if (row && row.email !== identity.email) {
-    await d1.prepare("UPDATE profiles SET email = ?, updated_at = ? WHERE id = ?")
-      .bind(identity.email, Date.now(), identity.userId)
-      .run();
-    row.email = identity.email;
+    const demoRow = await d1.prepare(
+      "SELECT p.id, p.email, p.display_name, p.role, p.headline, p.company, p.bio, p.avatar_color, p.sectors_json, p.stages_json, p.locations_json, p.portfolio_startup_ids_json, p.onboarding_complete FROM demo_sessions s INNER JOIN profiles p ON p.id = s.profile_id WHERE s.token_hash = ? AND s.expires_at > ?"
+    ).bind(tokenHash, now).first<ProfileRow>();
+    if (demoRow) return mapProfile(demoRow);
+    await d1.prepare("DELETE FROM demo_sessions WHERE token_hash = ?").bind(tokenHash).run();
   }
 
-  return row ? mapProfile(row) : null;
+  return null;
 }
 
 export function profileTitle(profile: MemberProfile): string {

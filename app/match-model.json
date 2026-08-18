@@ -1,0 +1,44 @@
+{
+  "version": "innovestart-match-v1.0",
+  "algorithm": "Monotonic L2-regularized logistic regression with reciprocal utility reranking",
+  "generatedAt": "2026-08-19",
+  "featureNames": [
+    "sectorFit",
+    "stageFit",
+    "chequeFit",
+    "geographyFit",
+    "thesisSimilarity",
+    "portfolioRelevance",
+    "tractionQuality",
+    "businessModelFit",
+    "profileCompleteness",
+    "portfolioConflict"
+  ],
+  "intercept": -5.015944,
+  "weights": {
+    "sectorFit": 2.885902,
+    "stageFit": 1.088433,
+    "chequeFit": 1.737735,
+    "geographyFit": 0.955823,
+    "thesisSimilarity": 2.145137,
+    "portfolioRelevance": 0.05,
+    "tractionQuality": 0.236668,
+    "businessModelFit": 0.594578,
+    "profileCompleteness": 0.05,
+    "portfolioConflict": -0.360186
+  },
+  "metrics": {
+    "trainPairs": 480,
+    "validationPairs": 120,
+    "positiveRate": 0.5517,
+    "accuracy": 0.95,
+    "logLoss": 0.2735,
+    "auc": 0.9833,
+    "tierDistribution": {
+      "primary": 217,
+      "secondary": 150,
+      "request": 233
+    }
+  },
+  "trainingData": "30 synthetic founder profiles × 20 synthetic investor profiles; deterministic 80/20 pair split"
+}

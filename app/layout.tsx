@@ -21,25 +21,25 @@ export async function generateMetadata(): Promise<Metadata> {
 
   return {
     metadataBase: new URL(origin),
-    title: "Innovestart — Meet the people building what’s next",
-    description: "Watch startup stories, follow real progress, and meet founders and investors who share your ambition.",
+    title: "Innovestart — Startup intelligence, built for both sides",
+    description: "Discover companies, understand investor fit, size markets, route trusted outreach, and move promising conversations forward.",
     openGraph: {
       type: "website",
-      title: "Innovestart — Meet the people building what’s next",
-      description: "Watch startup stories, follow real progress, and meet founders and investors who share your ambition.",
+      title: "Innovestart — Startup intelligence, built for both sides",
+      description: "Discover companies, understand investor fit, size markets, route trusted outreach, and move promising conversations forward.",
       url: origin,
       siteName: "Innovestart",
-      images: [{ url: `${origin}/og-sunlit.png`, width: 1728, height: 920, alt: "Innovestart — Meet the people building what’s next" }],
+      images: [{ url: `${origin}/innovestart-network-v2.png`, width: 1731, height: 909, alt: "An abstract network of startups and investors connected through Innovestart" }],
     },
     twitter: {
       card: "summary_large_image",
-      title: "Innovestart — Meet the people building what’s next",
-      description: "Watch startup stories, follow real progress, and meet founders and investors who share your ambition.",
-      images: [`${origin}/og-sunlit.png`],
+      title: "Innovestart — Startup intelligence, built for both sides",
+      description: "Discover companies, understand investor fit, size markets, route trusted outreach, and move promising conversations forward.",
+      images: [`${origin}/innovestart-network-v2.png`],
     },
   icons: {
-    icon: "/og.png",
-    shortcut: "/og.png",
+    icon: "/favicon.svg",
+    shortcut: "/favicon.svg",
   },
   };
 }
