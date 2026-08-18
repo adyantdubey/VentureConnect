@@ -1,4 +1,5 @@
 import { ensureDatabase, getD1 } from "../../../db";
+import { getCurrentMember } from "../../server/member";
 
 const allowedActions = new Set(["like", "save", "share", "comment"]);
 
@@ -24,7 +25,9 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
-    const payload = await request.json() as { postId?: string; action?: string; actor?: string; content?: string };
+    const profile = await getCurrentMember();
+    if (!profile) return Response.json({ error: "Sign in to join the conversation." }, { status: 401 });
+    const payload = await request.json() as { postId?: string; action?: string; content?: string };
     if (!payload.postId || !payload.action || !allowedActions.has(payload.action)) {
       return Response.json({ error: "A valid postId and action are required." }, { status: 400 });
     }
@@ -32,9 +35,17 @@ export async function POST(request: Request) {
       return Response.json({ error: "A comment cannot be empty." }, { status: 400 });
     }
     await ensureDatabase();
+    if (payload.action === "like" || payload.action === "save") {
+      const existing = await getD1().prepare("SELECT id FROM engagements WHERE post_id = ? AND actor_profile_id = ? AND action = ? LIMIT 1")
+        .bind(payload.postId, profile.id, payload.action).first<{ id: number }>();
+      if (existing) {
+        await getD1().prepare("DELETE FROM engagements WHERE id = ?").bind(existing.id).run();
+        return Response.json({ ok: true, active: false });
+      }
+    }
     const result = await getD1()
-      .prepare("INSERT INTO engagements (post_id, actor, action, content, created_at) VALUES (?, ?, ?, ?, ?)")
-      .bind(payload.postId, (payload.actor ?? "Innovestart member").slice(0, 120), payload.action, payload.content?.trim().slice(0, 1500) ?? null, Date.now())
+      .prepare("INSERT INTO engagements (post_id, actor_profile_id, actor, action, content, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+      .bind(payload.postId, profile.id, profile.displayName.slice(0, 120), payload.action, payload.content?.trim().slice(0, 1500) ?? null, Date.now())
       .run();
     return Response.json({ ok: true, id: result.meta.last_row_id }, { status: 201 });
   } catch (error) {

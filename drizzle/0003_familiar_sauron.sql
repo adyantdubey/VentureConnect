@@ -1,0 +1,2 @@
+CREATE INDEX `idx_community_posts_author_created` ON `community_posts` (`author_profile_id`,`created_at`);--> statement-breakpoint
+CREATE INDEX `idx_engagements_actor_action` ON `engagements` (`actor_profile_id`,`action`);

@@ -36,8 +36,9 @@ export type Post = {
   headline: string;
   body: string;
   tags: string[];
-  mediaType: "video" | "image";
+  mediaType: "video" | "image" | "none";
   mediaUrl: string;
+  mediaAssetId?: string;
   poster: string;
   mediaLabel: string;
   mediaTitle: string;
@@ -45,6 +46,7 @@ export type Post = {
   likes: number;
   shares: number;
   comments: CommentItem[];
+  ownedByViewer?: boolean;
 };
 
 export const startups: Startup[] = [

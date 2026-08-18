@@ -17,7 +17,6 @@ import {
   Image as ImageIcon,
   LayoutGrid,
   LineChart,
-  Link2,
   Mail,
   MapPin,
   Menu,
@@ -43,21 +42,37 @@ import { initialPosts, investors, Post, startups, type CommentItem, type Startup
 
 type View = "home" | "discover" | "messages" | "network";
 type Role = "investor" | "founder";
-type Viewer = { name: string; initials: string; title: string; role: Role };
-
-const defaultInvestor: Viewer = {
-  name: "Arjun Kapoor",
-  initials: "AK",
-  title: "Angel investor · Future of work",
-  role: "investor",
+type Viewer = {
+  id: string;
+  email: string;
+  name: string;
+  initials: string;
+  title: string;
+  role: Role;
+  headline: string;
+  company: string;
+  bio: string;
+  onboardingComplete: boolean;
 };
-
-const defaultFounder: Viewer = {
-  name: "Mira Joshi",
-  initials: "MJ",
-  title: "Founder · EmberGrid",
-  role: "founder",
+type ProfilePayload = {
+  id: string;
+  email: string;
+  displayName: string;
+  role: Role;
+  headline: string;
+  company: string;
+  bio: string;
+  onboardingComplete: boolean;
 };
+type UploadedAsset = { id: string; url: string; fileName: string; contentType: string; mediaType: "video" | "image"; sizeBytes: number };
+type PostDraft = { headline: string; body: string; tags: string; media?: UploadedAsset };
+type ProfileDraft = { displayName: string; role: Role; headline: string; company: string; bio: string };
+
+function viewerFromProfile(profile: ProfilePayload): Viewer {
+  const initials = profile.displayName.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase() || "IN";
+  const fallback = profile.role === "founder" ? (profile.company ? `Founder · ${profile.company}` : "Startup founder") : (profile.company ? `Investor · ${profile.company}` : "Startup investor");
+  return { id: profile.id, email: profile.email, name: profile.displayName, initials, title: profile.headline || fallback, role: profile.role, headline: profile.headline, company: profile.company, bio: profile.bio, onboardingComplete: profile.onboardingComplete };
+}
 
 function Logo({ compact = false }: { compact?: boolean }) {
   return (
@@ -92,6 +107,8 @@ export default function InnovestartApp() {
   const [viewer, setViewer] = useState<Viewer | null>(null);
   const [role, setRole] = useState<Role>("investor");
   const [authOpen, setAuthOpen] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [authChecking, setAuthChecking] = useState(true);
   const [composerOpen, setComposerOpen] = useState(false);
   const [selectedStartup, setSelectedStartup] = useState<Startup | null>(null);
   const [selectedVideo, setSelectedVideo] = useState<Post | null>(null);
@@ -112,11 +129,19 @@ export default function InnovestartApp() {
   const [accountOpen, setAccountOpen] = useState(false);
 
   useEffect(() => {
-    const stored = window.localStorage.getItem("innovestart-demo-viewer");
-    if (stored) {
-      try { setViewer(JSON.parse(stored) as Viewer); } catch { window.localStorage.removeItem("innovestart-demo-viewer"); }
-    }
-
+    fetch("/api/profile")
+      .then(async (response) => response.ok ? response.json() : null)
+      .then((payload: { profile?: ProfilePayload } | null) => {
+        if (!payload?.profile) return;
+        let nextViewer = viewerFromProfile(payload.profile);
+        const pendingRole = window.localStorage.getItem("innovestart-pending-role");
+        if (!nextViewer.onboardingComplete && (pendingRole === "founder" || pendingRole === "investor")) nextViewer = { ...nextViewer, role: pendingRole };
+        setViewer(nextViewer);
+        setRole(nextViewer.role);
+        if (!nextViewer.onboardingComplete) setProfileOpen(true);
+      })
+      .catch(() => undefined)
+      .finally(() => setAuthChecking(false));
     fetch("/api/posts")
       .then((response) => response.ok ? response.json() : Promise.reject())
       .then((payload: { posts?: Post[] }) => {
@@ -139,24 +164,19 @@ export default function InnovestartApp() {
   };
 
   const authenticate = () => {
-    const nextViewer = role === "investor" ? defaultInvestor : defaultFounder;
-    setViewer(nextViewer);
-    window.localStorage.setItem("innovestart-demo-viewer", JSON.stringify(nextViewer));
-    setAuthOpen(false);
-    setToast(`Welcome to Innovestart, ${nextViewer.name.split(" ")[0]}`);
+    window.localStorage.setItem("innovestart-pending-role", role);
+    window.location.assign("/signin-with-chatgpt?return_to=/");
   };
 
   const signOut = () => {
-    setViewer(null);
-    window.localStorage.removeItem("innovestart-demo-viewer");
-    setToast("You’re signed out");
+    window.location.assign("/signout-with-chatgpt?return_to=/");
   };
 
   const recordAction = (postId: string, action: string, content?: string) => {
     fetch("/api/engagement", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ postId, action, content, actor: viewer?.name ?? "Guest" }),
+      body: JSON.stringify({ postId, action, content }),
     }).catch(() => undefined);
   };
 
@@ -233,31 +253,60 @@ export default function InnovestartApp() {
     setToast("Comment added");
   };
 
-  const submitPost = (draft: { headline: string; body: string; tags: string }) => {
-    if (!viewer) return;
-    const post: Post = {
-      id: `post-${Date.now()}`,
-      startupId: viewer.role === "founder" ? "embergrid" : "community",
-      startup: viewer.role === "founder" ? "EmberGrid" : viewer.name,
-      logo: viewer.role === "founder" ? "E" : viewer.initials,
-      logoColor: viewer.role === "founder" ? "#0f7657" : "#c79c57",
-      meta: `${viewer.role === "founder" ? "Climate tech · Bengaluru" : "Investor insight"} · now`,
-      headline: draft.headline,
-      body: draft.body,
-      tags: draft.tags.split(",").map((tag) => tag.trim().replace(/^#/, "")).filter(Boolean),
-      mediaType: "image",
-      mediaUrl: "",
-      poster: "https://images.unsplash.com/photo-1521737604893-d14cc237f11d?auto=format&fit=crop&w=1400&q=86",
-      mediaLabel: viewer.role === "founder" ? "FOUNDER UPDATE · JUST NOW" : "INVESTOR NOTE · JUST NOW",
-      mediaTitle: "Building what’s next, together.",
-      likes: 0,
-      shares: 0,
-      comments: [],
-    };
-    setPosts((current) => [post, ...current]);
-    setComposerOpen(false);
-    setToast("Your post is live");
-    fetch("/api/posts", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(post) }).catch(() => undefined);
+  const submitPost = async (draft: PostDraft) => {
+    if (!viewer) return false;
+    try {
+      const response = await fetch("/api/posts", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          headline: draft.headline,
+          body: draft.body,
+          tags: draft.tags.split(",").map((tag) => tag.trim().replace(/^#/, "")).filter(Boolean),
+          mediaAssetId: draft.media?.id,
+          mediaTitle: draft.headline,
+        }),
+      });
+      const payload = await response.json() as { post?: Post; error?: string };
+      if (!response.ok || !payload.post) throw new Error(payload.error || "Unable to publish this post.");
+      setPosts((current) => [payload.post!, ...current]);
+      setComposerOpen(false);
+      setToast("Your post is live and visible to the community");
+      return true;
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "Unable to publish this post");
+      return false;
+    }
+  };
+
+  const deletePost = async (post: Post) => {
+    if (!post.ownedByViewer || !window.confirm("Delete this post and its uploaded media? This cannot be undone.")) return;
+    const response = await fetch(`/api/posts?id=${encodeURIComponent(post.id)}`, { method: "DELETE" });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({})) as { error?: string };
+      setToast(payload.error || "Unable to delete this post");
+      return;
+    }
+    setPosts((current) => current.filter((item) => item.id !== post.id));
+    setToast("Post deleted");
+  };
+
+  const saveProfile = async (draft: ProfileDraft) => {
+    try {
+      const response = await fetch("/api/profile", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(draft) });
+      const payload = await response.json() as { profile?: ProfilePayload; error?: string };
+      if (!response.ok || !payload.profile) throw new Error(payload.error || "Unable to save your profile.");
+      const nextViewer = viewerFromProfile(payload.profile);
+      setViewer(nextViewer);
+      setRole(nextViewer.role);
+      setProfileOpen(false);
+      window.localStorage.removeItem("innovestart-pending-role");
+      setToast("Profile saved");
+      return true;
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "Unable to save your profile");
+      return false;
+    }
   };
 
   const goTo = (next: View) => {
@@ -312,9 +361,9 @@ export default function InnovestartApp() {
           {viewer ? (
             <div className="account-wrap top-popover-wrap">
               <button className="profile-chip" onClick={() => { setAccountOpen((current) => !current); setNotificationsOpen(false); }}><Avatar initials={viewer.initials} size="small" /><span>{viewer.name.split(" ")[0]}</span><ChevronDown size={14} /></button>
-              {accountOpen && <div className="account-popover"><div><Avatar initials={viewer.initials} /><span><strong>{viewer.name}</strong><small>{viewer.title}</small></span></div><button onClick={() => { setAccountOpen(false); goTo("network"); }}><Users size={15} /> View my network</button><button onClick={() => { setAccountOpen(false); setRole(viewer.role === "investor" ? "founder" : "investor"); setAuthOpen(true); }}><Sparkles size={15} /> Switch demo role</button><button onClick={() => { setAccountOpen(false); signOut(); }}><ArrowUpRight size={15} /> Sign out</button></div>}
+              {accountOpen && <div className="account-popover"><div><Avatar initials={viewer.initials} /><span><strong>{viewer.name}</strong><small>{viewer.title}</small></span></div><button onClick={() => { setAccountOpen(false); setProfileOpen(true); }}><Sparkles size={15} /> Edit my profile</button><button onClick={() => { setAccountOpen(false); goTo("network"); }}><Users size={15} /> View my network</button><button onClick={() => { setAccountOpen(false); signOut(); }}><ArrowUpRight size={15} /> Sign out</button></div>}
             </div>
-          ) : <button className="header-signin" onClick={() => setAuthOpen(true)}>Sign in</button>}
+          ) : <button className="header-signin" disabled={authChecking} onClick={() => setAuthOpen(true)}>{authChecking ? "Checking…" : "Sign in"}</button>}
         </div>
       </header>
 
@@ -342,6 +391,7 @@ export default function InnovestartApp() {
           onComment={addComment}
           onStartup={setSelectedStartup}
           onPlay={setSelectedVideo}
+          onDelete={deletePost}
           onUtility={setToast}
           onNavigate={goTo}
         />
@@ -351,6 +401,7 @@ export default function InnovestartApp() {
       {view === "network" && <NetworkView viewer={viewer} onAuth={() => setAuthOpen(true)} />}
 
       {authOpen && <AuthModal role={role} setRole={setRole} onClose={() => setAuthOpen(false)} onAuthenticate={authenticate} />}
+      {profileOpen && viewer && <ProfileModal viewer={viewer} required={!viewer.onboardingComplete} onClose={() => viewer.onboardingComplete && setProfileOpen(false)} onSave={saveProfile} />}
       {composerOpen && viewer && <ComposerModal viewer={viewer} onClose={() => setComposerOpen(false)} onSubmit={submitPost} />}
       {selectedStartup && <StartupModal startup={selectedStartup} followed={following.has(selectedStartup.id)} onClose={() => setSelectedStartup(null)} onFollow={() => toggleFollow(selectedStartup.id, selectedStartup.name)} onMessage={() => { if (requireAuth()) { setSelectedStartup(null); goTo("messages"); setToast(`Conversation with ${selectedStartup.name} opened`); } }} />}
       {selectedVideo && <VideoModal post={selectedVideo} onClose={() => setSelectedVideo(null)} />}
@@ -386,6 +437,7 @@ type HomeViewProps = {
   onComment: (id: string) => void;
   onStartup: (startup: Startup) => void;
   onPlay: (post: Post) => void;
+  onDelete: (post: Post) => void;
   onUtility: (message: string) => void;
   onNavigate: (view: View) => void;
 };
@@ -440,26 +492,26 @@ function HomeView(props: HomeViewProps) {
             <article className="post-card card" key={post.id}>
               <div className="post-header">
                 <button className="logo-button" onClick={() => startup && props.onStartup(startup)}><span className="startup-logo logo-normal" style={{ background: post.logoColor }}>{post.logo}</span></button>
-                <button className="post-author" onClick={() => startup && props.onStartup(startup)}><h3>{post.startup} <BadgeCheck size={15} /></h3><p>{post.meta}</p></button>
+                <button className="post-author" onClick={() => startup && props.onStartup(startup)}><h3>{post.startup} <BadgeCheck size={15} />{post.ownedByViewer && <span className="owned-badge">Your post</span>}</h3><p>{post.meta}</p></button>
                 {startup && <button className={`follow-button ${props.following.has(startup.id) ? "following" : ""}`} onClick={() => props.onFollow(startup.id, startup.name)}>{props.following.has(startup.id) ? <><Check size={13} /> Following</> : <><Plus size={13} /> Follow</>}</button>}
-                <button className="more-button" aria-label="More options" onClick={() => props.onUtility("Post actions opened — reporting and sharing controls are available in the production menu")}><MoreHorizontal size={19} /></button>
+                <button className="more-button" aria-label={post.ownedByViewer ? "Delete your post" : "More options"} onClick={() => post.ownedByViewer ? props.onDelete(post) : props.onUtility("Post actions opened — reporting and sharing controls are available in the production menu")}><MoreHorizontal size={19} /></button>
               </div>
               <div className="post-copy">
                 <h2>{post.headline}</h2>
                 <p>{post.body}</p>
                 <div className="tag-row">{post.tags.map((tag) => <span key={tag}>#{tag}</span>)}</div>
               </div>
-              {post.mediaType === "video" ? (
+              {post.mediaType === "video" && post.mediaUrl ? (
                 <button className="media-wrap video-cover" onClick={() => props.onPlay(post)} aria-label={`Play ${post.startup} video: ${post.mediaTitle}`} style={{ backgroundImage: `linear-gradient(180deg, rgba(17,29,51,.02), rgba(17,29,51,.7)), url(${post.poster})` }}>
                   <span className="large-play"><Play size={20} fill="currentColor" /></span>
                   <span className="media-copy"><span>{post.mediaLabel}</span><strong>{post.mediaTitle}</strong></span>
                   <span className="duration">{post.duration}</span>
                 </button>
-              ) : (
-                <div className="media-wrap image-media" style={{ backgroundImage: `url(${post.poster})` }} role="img" aria-label={post.mediaTitle}>
+              ) : post.mediaType === "image" && (post.poster || post.mediaUrl) ? (
+                <div className="media-wrap image-media" style={{ backgroundImage: `url(${post.poster || post.mediaUrl})` }} role="img" aria-label={post.mediaTitle}>
                   <div className="media-copy"><span>{post.mediaLabel}</span><strong>{post.mediaTitle}</strong></div>
                 </div>
-              )}
+              ) : null}
               <div className="engagement-summary"><span><span className="reaction-stack"><Heart size={10} fill="currentColor" /><Sparkles size={10} /></span>{post.likes + (props.liked.has(post.id) ? 1 : 0)} people reacted</span><button onClick={() => props.onComments(post.id)}>{comments.length} comments</button><span>{post.shares + (props.shared[post.id] ?? 0)} shares</span></div>
               <div className="engagement-actions">
                 <button className={props.liked.has(post.id) ? "engaged" : ""} onClick={() => props.onLike(post.id)}><Heart size={17} fill={props.liked.has(post.id) ? "currentColor" : "none"} /> Like</button>
@@ -538,18 +590,84 @@ function NetworkView({ viewer, onAuth }: { viewer: Viewer | null; onAuth: () => 
 }
 
 function GatedView({ icon, title, body, onAuth }: { icon: React.ReactNode; title: string; body: string; onAuth: () => void }) {
-  return <div className="gated-page"><div className="gated-glow" /><section className="gated-card card"><div className="gated-icon">{icon}</div><span className="eyebrow">MEMBERS ONLY</span><h1>{title}</h1><p>{body}</p><button className="google-button" onClick={onAuth}><span className="google-g">G</span> Continue with Google</button><small>Investor and founder accounts are free during early access.</small></section></div>;
+  return <div className="gated-page"><div className="gated-glow" /><section className="gated-card card"><div className="gated-icon">{icon}</div><span className="eyebrow">MEMBERS ONLY</span><h1>{title}</h1><p>{body}</p><button className="google-button" onClick={onAuth}><span className="google-g">I</span> Continue securely</button><small>Real member accounts are free during early access.</small></section></div>;
 }
 
 function AuthModal({ role, setRole, onClose, onAuthenticate }: { role: Role; setRole: (role: Role) => void; onClose: () => void; onAuthenticate: () => void }) {
-  return <Modal onClose={onClose} wide><div className="auth-layout"><section className="auth-story"><Logo /><span className="auth-kicker"><Sparkles size={14} /> FOUNDERS × INVESTORS</span><h2>The right idea<br />deserves the<br /><em>right room.</em></h2><p>Watch the story. Ask a better question. Meet the person who can help move it forward.</p><div className="auth-proof"><div className="proof-avatars"><Avatar initials="RM" color="#ff8064" size="small" /><Avatar initials="KS" color="#4f6ff3" size="small" /><Avatar initials="LI" color="#31b782" size="small" /></div><div><strong>2,400+ builders & backers</strong><span>Making introductions that matter</span></div></div></section><section className="auth-form"><span className="auth-step">WELCOME TO INNOVESTART</span><h1>How will you join?</h1><p>Choose your perspective. You can explore the other side anytime.</p><div className="role-switch"><button className={role === "investor" ? "active" : ""} onClick={() => setRole("investor")}><CircleDollarSign size={20} /><span><strong>I&apos;m an investor</strong><small>Discover & connect</small></span>{role === "investor" && <Check size={16} />}</button><button className={role === "founder" ? "active" : ""} onClick={() => setRole("founder")}><Rocket size={20} /><span><strong>I&apos;m a founder</strong><small>Share & grow</small></span>{role === "founder" && <Check size={16} />}</button></div><button className="google-button" onClick={onAuthenticate}><span className="google-g">G</span> Continue with Google</button><div className="demo-note"><Sparkles size={14} /><span><strong>MVP demo mode</strong> — uses a synthetic account. Add Google OAuth credentials to enable production sign-in.</span></div><p className="auth-terms">By continuing, you agree to our Terms and Privacy Policy.</p></section></div></Modal>;
+  return <Modal onClose={onClose} wide><div className="auth-layout"><section className="auth-story"><Logo /><span className="auth-kicker"><Sparkles size={14} /> FOUNDERS × INVESTORS</span><h2>The right idea<br />deserves the<br /><em>right room.</em></h2><p>Watch the story. Ask a better question. Meet the person who can help move it forward.</p><div className="auth-proof"><div className="proof-avatars"><Avatar initials="RM" color="#ff8064" size="small" /><Avatar initials="KS" color="#4f6ff3" size="small" /><Avatar initials="LI" color="#31b782" size="small" /></div><div><strong>Verified member identity</strong><span>Your posts and uploads stay attached to you</span></div></div></section><section className="auth-form"><span className="auth-step">WELCOME TO INNOVESTART</span><h1>How will you join?</h1><p>Choose your perspective, then create your secure member account.</p><div className="role-switch"><button className={role === "investor" ? "active" : ""} onClick={() => setRole("investor")}><CircleDollarSign size={20} /><span><strong>I&apos;m an investor</strong><small>Discover & connect</small></span>{role === "investor" && <Check size={16} />}</button><button className={role === "founder" ? "active" : ""} onClick={() => setRole("founder")}><Rocket size={20} /><span><strong>I&apos;m a founder</strong><small>Share & grow</small></span>{role === "founder" && <Check size={16} />}</button></div><button className="google-button" onClick={onAuthenticate}><span className="google-g">I</span> Continue with secure sign-in</button><div className="demo-note"><BadgeCheck size={14} /><span><strong>Real account mode</strong> — identity, profile, posts, comments, and uploads are verified on the server.</span></div><p className="auth-terms">By continuing, you agree to our Terms and Privacy Policy.</p></section></div></Modal>;
 }
 
-function ComposerModal({ viewer, onClose, onSubmit }: { viewer: Viewer; onClose: () => void; onSubmit: (draft: { headline: string; body: string; tags: string }) => void }) {
+function ProfileModal({ viewer, required, onClose, onSave }: { viewer: Viewer; required: boolean; onClose: () => void; onSave: (draft: ProfileDraft) => Promise<boolean> }) {
+  const [displayName, setDisplayName] = useState(viewer.name);
+  const [role, setRole] = useState<Role>(viewer.role);
+  const [headline, setHeadline] = useState(viewer.headline);
+  const [company, setCompany] = useState(viewer.company);
+  const [bio, setBio] = useState(viewer.bio);
+  const [saving, setSaving] = useState(false);
+  const save = async () => { setSaving(true); await onSave({ displayName, role, headline, company, bio }); setSaving(false); };
+  return <Modal onClose={onClose}><div className="profile-editor"><span className="eyebrow">{required ? "ONE LAST STEP" : "YOUR MEMBER PROFILE"}</span><h2>{required ? "Tell the community who you are." : "Keep your profile current."}</h2><p>Your verified email is <strong>{viewer.email}</strong>. It stays private unless you choose to share it.</p><div className="role-switch compact"><button className={role === "founder" ? "active" : ""} onClick={() => setRole("founder")}><Rocket size={18} /><span><strong>Founder</strong><small>Share a startup</small></span>{role === "founder" && <Check size={15} />}</button><button className={role === "investor" ? "active" : ""} onClick={() => setRole("investor")}><CircleDollarSign size={18} /><span><strong>Investor</strong><small>Discover companies</small></span>{role === "investor" && <Check size={15} />}</button></div><label><span>Your name</span><input value={displayName} onChange={(event) => setDisplayName(event.target.value)} maxLength={80} /></label><label><span>{role === "founder" ? "Startup or company" : "Fund or organization"}</span><input value={company} onChange={(event) => setCompany(event.target.value)} placeholder={role === "founder" ? "e.g. EmberGrid" : "e.g. Northstar Ventures"} maxLength={100} /></label><label><span>Headline</span><input value={headline} onChange={(event) => setHeadline(event.target.value)} placeholder={role === "founder" ? "Founder building cleaner industrial heat" : "Seed investor in climate and hard tech"} maxLength={120} /></label><label><span>About you</span><textarea value={bio} onChange={(event) => setBio(event.target.value)} placeholder="What are you building, backing, or hoping to meet people around?" rows={4} maxLength={600} /></label><button className="primary-wide" disabled={saving || !displayName.trim()} onClick={save}>{saving ? "Saving…" : required ? "Create my profile" : "Save profile"}</button></div></Modal>;
+}
+
+function ComposerModal({ viewer, onClose, onSubmit }: { viewer: Viewer; onClose: () => void; onSubmit: (draft: PostDraft) => Promise<boolean> }) {
   const [headline, setHeadline] = useState("");
   const [body, setBody] = useState("");
   const [tags, setTags] = useState("");
-  return <Modal onClose={onClose}><div className="compose-modal"><div className="compose-title"><Avatar initials={viewer.initials} /><div><h2>Create a post</h2><p>Posting as {viewer.name}</p></div></div><label><span>Headline</span><input value={headline} onChange={(event) => setHeadline(event.target.value)} placeholder="What should the network know?" autoFocus /></label><label><span>Your update</span><textarea value={body} onChange={(event) => setBody(event.target.value)} placeholder="Share the story, the milestone, or the question behind it..." rows={6} /></label><label><span>Topics</span><input value={tags} onChange={(event) => setTags(event.target.value)} placeholder="AI, SeedRound, Product" /></label><div className="compose-tools"><button><Video size={16} /> Add video</button><button><ImageIcon size={16} /> Add image</button><button><Link2 size={16} /> Add link</button></div><div className="compose-footer"><span>{body.length}/1,500</span><button className="primary-wide" disabled={!headline.trim() || !body.trim()} onClick={() => onSubmit({ headline: headline.trim(), body: body.trim(), tags })}>Publish post <Send size={15} /></button></div></div></Modal>;
+  const [media, setMedia] = useState<UploadedAsset | undefined>();
+  const [preview, setPreview] = useState("");
+  const [previewType, setPreviewType] = useState<"video" | "image">("image");
+  const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadError, setUploadError] = useState("");
+  const [publishing, setPublishing] = useState(false);
+  useEffect(() => () => { if (preview) URL.revokeObjectURL(preview); }, [preview]);
+
+  const upload = async (file?: File) => {
+    if (!file) return;
+    if (preview) URL.revokeObjectURL(preview);
+    setPreview(URL.createObjectURL(file));
+    setPreviewType(file.type.startsWith("video/") ? "video" : "image");
+    setUploadError("");
+    setUploading(true);
+    setUploadProgress(0);
+    let uploadId = "";
+    try {
+      const startResponse = await fetch("/api/uploads?action=start", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ fileName: file.name, contentType: file.type, sizeBytes: file.size }) });
+      const startPayload = await startResponse.json() as { upload?: { id: string; chunkSize: number }; error?: string };
+      if (!startResponse.ok || !startPayload.upload) throw new Error(startPayload.error || "Unable to start the upload.");
+      uploadId = startPayload.upload.id;
+      const chunkSize = startPayload.upload.chunkSize;
+      for (let offset = 0, part = 0; offset < file.size; offset += chunkSize, part += 1) {
+        const chunk = file.slice(offset, Math.min(file.size, offset + chunkSize));
+        await new Promise<void>((resolve, reject) => {
+          const request = new XMLHttpRequest();
+          request.open("PUT", `/api/uploads?id=${encodeURIComponent(uploadId)}&part=${part}`);
+          request.setRequestHeader("content-type", "application/octet-stream");
+          request.upload.onprogress = (event) => { if (event.lengthComputable) setUploadProgress(Math.min(99, Math.round(((offset + event.loaded) / file.size) * 100))); };
+          request.onload = () => request.status >= 200 && request.status < 300 ? resolve() : reject(new Error("A file part could not be uploaded."));
+          request.onerror = () => reject(new Error("The upload was interrupted. Please try again."));
+          request.send(chunk);
+        });
+      }
+      const completeResponse = await fetch(`/api/uploads?action=complete&id=${encodeURIComponent(uploadId)}`, { method: "POST" });
+      const completePayload = await completeResponse.json() as { asset?: UploadedAsset; error?: string };
+      if (!completeResponse.ok || !completePayload.asset) throw new Error(completePayload.error || "Unable to finish the upload.");
+      setMedia(completePayload.asset);
+      setUploadProgress(100);
+    } catch (error) {
+      if (uploadId) fetch(`/api/uploads?id=${encodeURIComponent(uploadId)}`, { method: "DELETE", keepalive: true }).catch(() => undefined);
+      setUploadError(error instanceof Error ? error.message : "Upload failed.");
+    } finally {
+      setUploading(false);
+    }
+  };
+  const discardMedia = () => {
+    if (media) fetch(`/api/uploads?id=${encodeURIComponent(media.id)}`, { method: "DELETE", keepalive: true }).catch(() => undefined);
+    if (preview) URL.revokeObjectURL(preview);
+    setMedia(undefined); setPreview(""); setPreviewType("image"); setUploadProgress(0); setUploadError("");
+  };
+  const close = () => { discardMedia(); onClose(); };
+  const publish = async () => { setPublishing(true); const done = await onSubmit({ headline: headline.trim(), body: body.trim(), tags, media }); if (!done) setPublishing(false); };
+  return <Modal onClose={close}><div className="compose-modal"><div className="compose-title"><Avatar initials={viewer.initials} /><div><h2>Create a post</h2><p>Posting as {viewer.company || viewer.name} · owned by your account</p></div></div><label><span>Headline</span><input value={headline} onChange={(event) => setHeadline(event.target.value)} placeholder="What should the network know?" autoFocus /></label><label><span>Your update</span><textarea value={body} onChange={(event) => setBody(event.target.value)} placeholder="Share the story, the milestone, or the question behind it..." rows={6} maxLength={1500} /></label><label><span>Topics</span><input value={tags} onChange={(event) => setTags(event.target.value)} placeholder="AI, SeedRound, Product" /></label>{preview && <div className="upload-preview">{previewType === "video" ? <video src={preview} controls muted /> : <img src={preview} alt="Upload preview" />}<button onClick={discardMedia} aria-label="Remove uploaded media"><X size={15} /></button>{uploading && <div className="upload-overlay"><strong>{uploadProgress}%</strong><span>Uploading securely…</span></div>}</div>}{uploadError && <p className="upload-error">{uploadError}</p>}<div className="compose-tools"><label><Video size={16} /> Add video<input type="file" accept="video/mp4,video/webm,video/quicktime" onChange={(event) => upload(event.target.files?.[0])} /></label><label><ImageIcon size={16} /> Add image<input type="file" accept="image/jpeg,image/png,image/webp,image/gif" onChange={(event) => upload(event.target.files?.[0])} /></label>{media && <span className="upload-ready"><Check size={14} /> {media.fileName}</span>}</div>{uploading && <div className="upload-progress" aria-label={`Upload ${uploadProgress}% complete`}><span style={{ width: `${uploadProgress}%` }} /></div>}<div className="compose-footer"><span>{body.length}/1,500</span><button className="primary-wide" disabled={uploading || publishing || !headline.trim() || !body.trim()} onClick={publish}>{publishing ? "Publishing…" : uploading ? `Uploading ${uploadProgress}%` : <>Publish post <Send size={15} /></>}</button></div></div></Modal>;
 }
 
 function VideoModal({ post, onClose }: { post: Post; onClose: () => void }) {
