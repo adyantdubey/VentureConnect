@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import InnovestartApp from "./innovestart-app";
 
 export const metadata: Metadata = {
-  title: "Innovestart — Where startups meet conviction",
-  description: "Discover ambitious startups, meet aligned investors, and build what’s next on Innovestart.",
+  title: "Innovestart — Meet the people building what’s next",
+  description: "Watch startup stories, follow real progress, and meet founders and investors who share your ambition.",
 };
 
 export default function Home() {

@@ -21,21 +21,21 @@ export async function generateMetadata(): Promise<Metadata> {
 
   return {
     metadataBase: new URL(origin),
-    title: "Innovestart — Where startups meet conviction",
-    description: "Discover ambitious startups, meet aligned investors, and build what’s next on Innovestart.",
+    title: "Innovestart — Meet the people building what’s next",
+    description: "Watch startup stories, follow real progress, and meet founders and investors who share your ambition.",
     openGraph: {
       type: "website",
-      title: "Innovestart — Where startups meet conviction",
-      description: "Founder stories, verified traction, and trusted investor connections—all in one high-signal network.",
+      title: "Innovestart — Meet the people building what’s next",
+      description: "Watch startup stories, follow real progress, and meet founders and investors who share your ambition.",
       url: origin,
       siteName: "Innovestart",
-      images: [{ url: `${origin}/og.png`, width: 1728, height: 920, alt: "Innovestart — Where bold ideas meet conviction" }],
+      images: [{ url: `${origin}/og-sunlit.png`, width: 1728, height: 920, alt: "Innovestart — Meet the people building what’s next" }],
     },
     twitter: {
       card: "summary_large_image",
-      title: "Innovestart — Where startups meet conviction",
-      description: "Founder stories, verified traction, and trusted investor connections.",
-      images: [`${origin}/og.png`],
+      title: "Innovestart — Meet the people building what’s next",
+      description: "Watch startup stories, follow real progress, and meet founders and investors who share your ambition.",
+      images: [`${origin}/og-sunlit.png`],
     },
   icons: {
     icon: "/og.png",
