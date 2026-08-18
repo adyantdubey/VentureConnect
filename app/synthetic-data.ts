@@ -1,5 +1,6 @@
 export type Startup = {
   id: string;
+  founderProfileId: string;
   name: string;
   initials: string;
   sector: string;
@@ -15,6 +16,7 @@ export type Startup = {
   color: string;
   tags: string[];
   poster: string;
+  createdAt: number;
 };
 
 export type CommentItem = {
@@ -46,390 +48,248 @@ export type Post = {
   likes: number;
   shares: number;
   comments: CommentItem[];
+  createdAt: number;
+  sourceLabel?: string;
+  sourceUrl?: string;
   ownedByViewer?: boolean;
 };
 
-export const startups: Startup[] = [
-  {
-    id: "embergrid",
-    name: "EmberGrid",
-    initials: "E",
-    sector: "Climate tech",
-    stage: "Seed",
-    location: "Bengaluru",
-    tagline: "Clean heat, whenever industry needs it.",
-    description: "Modular thermal batteries that store renewable power as high-temperature heat, helping Indian factories replace gas and cut energy spend.",
-    ask: "Raising ₹18 Cr",
-    growth: "₹1.8 Cr ARR",
-    signal: "7 paid pilots",
-    founded: "2023",
-    team: "14 people",
-    color: "#0f7657",
-    tags: ["Energy storage", "Manufacturing", "Climate"],
-    poster: "https://images.unsplash.com/photo-1473341304170-971dccb5ac1e?auto=format&fit=crop&w=1400&q=86",
-  },
-  {
-    id: "novihealth",
-    name: "Novi Health",
-    initials: "N",
-    sector: "Healthtech",
-    stage: "Seed",
-    location: "Mumbai",
-    tagline: "Continuous care for every pregnancy.",
-    description: "An AI-assisted care platform connecting expecting mothers in tier-two cities to clinicians, diagnostics, and round-the-clock guidance.",
-    ask: "Raising ₹9 Cr",
-    growth: "48% MoM",
-    signal: "12k members",
-    founded: "2024",
-    team: "11 people",
-    color: "#e67967",
-    tags: ["Maternal health", "AI", "Care delivery"],
-    poster: "https://images.unsplash.com/photo-1576091160399-112ba8d25d1d?auto=format&fit=crop&w=1400&q=86",
-  },
-  {
-    id: "orbitpay",
-    name: "OrbitPay",
-    initials: "O",
-    sector: "Fintech",
-    stage: "Pre-Series A",
-    location: "Gurugram",
-    tagline: "One treasury layer for borderless teams.",
-    description: "Multi-currency accounts, compliant vendor payments, and cash-flow intelligence for Indian companies selling to the world.",
-    ask: "Raising ₹12 Cr",
-    growth: "$2.4M GTV",
-    signal: "92% retention",
-    founded: "2022",
-    team: "19 people",
-    color: "#6571c7",
-    tags: ["Payments", "B2B", "Global trade"],
-    poster: "https://images.unsplash.com/photo-1556742049-0cfed4f6a45d?auto=format&fit=crop&w=1400&q=86",
-  },
-  {
-    id: "koru",
-    name: "Koru Robotics",
-    initials: "K",
-    sector: "Deeptech",
-    stage: "Seed",
-    location: "Chennai",
-    tagline: "Robotic inspection for hard-to-reach infrastructure.",
-    description: "Autonomous crawling robots and vision intelligence that detect faults in pipelines before they become expensive failures.",
-    ask: "Raising ₹15 Cr",
-    growth: "6 active pilots",
-    signal: "3 patents filed",
-    founded: "2023",
-    team: "16 people",
-    color: "#d6a945",
-    tags: ["Robotics", "Industrial AI", "Infrastructure"],
-    poster: "https://images.unsplash.com/photo-1485827404703-89b55fcc595e?auto=format&fit=crop&w=1400&q=86",
-  },
-  {
-    id: "fieldly",
-    name: "Fieldly",
-    initials: "F",
-    sector: "Agritech",
-    stage: "Pre-seed",
-    location: "Pune",
-    tagline: "Better crop decisions from one tiny sensor.",
-    description: "Low-cost field sensors and local-language recommendations that help small farms use less water and increase yield.",
-    ask: "Raising ₹4 Cr",
-    growth: "2,800 farms",
-    signal: "31% water saved",
-    founded: "2024",
-    team: "8 people",
-    color: "#6c9d4e",
-    tags: ["Agriculture", "IoT", "Water"],
-    poster: "https://images.unsplash.com/photo-1500382017468-9049fed747ef?auto=format&fit=crop&w=1400&q=86",
-  },
-  {
-    id: "mindmesh",
-    name: "Mindmesh AI",
-    initials: "M",
-    sector: "Enterprise AI",
-    stage: "Seed",
-    location: "Hyderabad",
-    tagline: "The operating memory for technical teams.",
-    description: "A private AI knowledge layer that turns scattered decisions, calls, and code context into trusted answers for engineering teams.",
-    ask: "Raising ₹10 Cr",
-    growth: "$21k MRR",
-    signal: "9 design partners",
-    founded: "2023",
-    team: "12 people",
-    color: "#8b67b7",
-    tags: ["AI", "Future of work", "Developer tools"],
-    poster: "https://images.unsplash.com/photo-1552664730-d307ca884978?auto=format&fit=crop&w=1400&q=86",
-  },
+export type Investor = {
+  id: string;
+  profileId: string;
+  name: string;
+  initials: string;
+  role: string;
+  firm: string;
+  bio: string;
+  sectors: string[];
+  stages: string[];
+  locations: string[];
+  thesis: string;
+  portfolioStartupIds: string[];
+  ticket: string;
+  color: string;
+  poster: string;
+};
+
+export type DemoMember = {
+  id: string;
+  name: string;
+  role: "founder" | "investor";
+  headline: string;
+  company: string;
+  bio: string;
+  color: string;
+  sectors: string[];
+  stages: string[];
+  locations: string[];
+  portfolioStartupIds: string[];
+};
+
+const DAY = 86_400_000;
+const NOW = Date.UTC(2026, 7, 18, 8, 0, 0);
+const colors = ["#19745c", "#db6b56", "#5567d8", "#c49331", "#875cb0", "#44844e", "#167f92", "#c55779", "#536a7f", "#a65b40"];
+const photoIds = [3184465, 3184292, 3861969, 3184436, 3184338, 3184325, 3760263, 3823488, 3861458, 7656743, 6476584, 5905445, 7688336, 1181406, 1181675, 3184418, 3184287, 3182773, 3184423, 3184398, 373543, 269077, 6153354, 7567443, 325229, 1591447, 2280571, 2280551, 3862370, 3183197, 3183150, 3182765, 3182826, 3764014, 3768126, 3769021, 4050315, 7413915, 3184657, 1181396];
+const pexelsPhoto = (index: number, width = 1400) => `https://images.pexels.com/photos/${photoIds[index % photoIds.length]}/pexels-photo-${photoIds[index % photoIds.length]}.jpeg?auto=compress&cs=tinysrgb&w=${width}`;
+
+const startupSeeds = [
+  ["embergrid", "EmberGrid", "Climate tech", "Seed", "Bengaluru", "Clean heat, whenever industry needs it."],
+  ["novihealth", "Novi Health", "Healthtech", "Seed", "Mumbai", "Continuous care for every pregnancy."],
+  ["orbitpay", "OrbitPay", "Fintech", "Pre-Series A", "Gurugram", "One treasury layer for borderless teams."],
+  ["koru", "Koru Robotics", "Deeptech", "Seed", "Chennai", "Robotic inspection for critical infrastructure."],
+  ["fieldly", "Fieldly", "Agritech", "Pre-seed", "Pune", "Better crop decisions from one tiny sensor."],
+  ["mindmesh", "Mindmesh AI", "Enterprise AI", "Seed", "Hyderabad", "The operating memory for technical teams."],
+  ["aerovault", "AeroVault", "Deeptech", "Series A", "Bengaluru", "Autonomous inventory for high-throughput warehouses."],
+  ["circularly", "Circularly", "Climate tech", "Pre-Series A", "Delhi", "Traceable materials for a circular supply chain."],
+  ["medlane", "MedLane", "Healthtech", "Series A", "Jaipur", "Specialist care that reaches smaller cities."],
+  ["ledgerleaf", "LedgerLeaf", "Fintech", "Seed", "Ahmedabad", "Cash-flow clarity for India’s small manufacturers."],
+  ["quillai", "Quill AI", "Enterprise AI", "Pre-seed", "Kochi", "Compliance work that writes itself—with receipts."],
+  ["sunharvest", "SunHarvest", "Agritech", "Seed", "Nashik", "Solar cold rooms that protect every harvest."],
+  ["bluecurrent", "BlueCurrent", "Climate tech", "Series A", "Goa", "Water intelligence for fast-growing cities."],
+  ["craftlane", "CraftLane", "Consumer", "Seed", "Jaipur", "Independent Indian makers, discovered globally."],
+  ["railbird", "Railbird", "Mobility", "Pre-Series A", "Chennai", "Predictive maintenance for urban rail networks."],
+  ["learnloop", "LearnLoop", "Edtech", "Seed", "Noida", "Career practice that feels like the real job."],
+  ["fluxcharge", "FluxCharge", "Mobility", "Series A", "Pune", "Reliable charging for commercial EV fleets."],
+  ["prismbio", "PrismBio", "Biotech", "Seed", "Hyderabad", "Faster diagnostics from programmable proteins."],
+  ["dockstack", "DockStack", "B2B SaaS", "Pre-seed", "Bengaluru", "The command centre for modern freight teams."],
+  ["homeward", "Homeward", "Proptech", "Seed", "Mumbai", "Trusted rental operations for every building."],
+  ["safesight", "SafeSight", "Deeptech", "Pre-Series A", "Chennai", "Computer vision that makes factory floors safer."],
+  ["rootwise", "Rootwise", "Agritech", "Seed", "Indore", "Biological crop protection built for the tropics."],
+  ["tandemcare", "TandemCare", "Healthtech", "Pre-seed", "Kolkata", "Care coordination for families managing chronic illness."],
+  ["papercut", "Papercut", "Fintech", "Seed", "Gurugram", "Invoices paid on time, without awkward follow-ups."],
+  ["nimbusops", "NimbusOps", "B2B SaaS", "Series A", "Bengaluru", "Cloud reliability for teams without a platform army."],
+  ["kindred", "Kindred", "Consumer", "Pre-seed", "Mumbai", "Small-group travel designed around real friendships."],
+  ["terraframe", "TerraFrame", "Climate tech", "Seed", "Surat", "Low-carbon building panels made from crop residue."],
+  ["voicebridge", "VoiceBridge", "Enterprise AI", "Pre-Series A", "Hyderabad", "Voice agents that understand Indian businesses."],
+  ["orbitclass", "OrbitClass", "Edtech", "Seed", "Bhubaneswar", "Live science labs for schools without laboratories."],
+  ["cargokite", "CargoKite", "Mobility", "Seed", "Kochi", "Electric coastal logistics for a cleaner supply chain."],
+] as const;
+
+const askByStage: Record<string, string> = { "Pre-seed": "Raising ₹4 Cr", Seed: "Raising ₹10 Cr", "Pre-Series A": "Raising ₹18 Cr", "Series A": "Raising ₹35 Cr" };
+
+export const startups: Startup[] = startupSeeds.map(([id, name, sector, stage, location, tagline], index) => ({
+  id,
+  founderProfileId: `demo-founder-${String(index + 1).padStart(2, "0")}`,
+  name,
+  initials: name.split(/\s+/).map((part) => part[0]).join("").slice(0, 2),
+  sector,
+  stage,
+  location,
+  tagline,
+  description: `${name} is a synthetic Innovestart demo company building practical ${sector.toLowerCase()} infrastructure for fast-growing teams and communities. Its traction and fundraising figures are illustrative, not investment claims.`,
+  ask: askByStage[stage],
+  growth: index % 3 === 0 ? `${12 + index * 2}% MoM` : index % 3 === 1 ? `${4 + index} paid pilots` : `₹${(1.2 + index * .18).toFixed(1)} Cr ARR`,
+  signal: index % 2 ? `${82 + (index % 13)}% retention` : `${3 + (index % 9)} design partners`,
+  founded: String(2021 + (index % 5)),
+  team: `${7 + index} people`,
+  color: colors[index % colors.length],
+  tags: [sector.replace(/\s+/g, ""), stage.replace(/\W/g, ""), location],
+  poster: pexelsPhoto(index),
+  createdAt: NOW - index * DAY,
+}));
+
+const investorSeeds = [
+  ["rhea", "Rhea Mehta", "Partner", "Northstar Ventures", ["Climate tech", "Deeptech"], ["Pre-seed", "Seed"], ["Bengaluru", "Mumbai"]],
+  ["dev", "Dev Malhotra", "Principal", "Springboard Capital", ["Healthtech", "Consumer"], ["Seed", "Series A"], ["Mumbai", "Delhi"]],
+  ["kabir", "Kabir Shah", "Operator & angel", "Independent", ["Climate tech", "B2B SaaS"], ["Pre-seed", "Seed"], ["Bengaluru", "Pune"]],
+  ["leena", "Leena Iyer", "Partner", "First Light", ["Fintech", "Enterprise AI"], ["Seed", "Pre-Series A"], ["Gurugram", "Bengaluru"]],
+  ["omar", "Omar Siddiqui", "Founder & angel", "Operator Collective", ["Enterprise AI", "Deeptech"], ["Pre-seed", "Seed"], ["Hyderabad", "Chennai"]],
+  ["meera", "Meera Nair", "VP", "Zenith Ventures", ["Agritech", "Climate tech"], ["Seed", "Series A"], ["Pune", "Bengaluru"]],
+  ["anika", "Anika Bose", "Managing Partner", "Riverline Partners", ["Healthtech", "Biotech"], ["Seed", "Pre-Series A"], ["Kolkata", "Hyderabad"]],
+  ["arjun", "Arjun Menon", "Investment Director", "Harbour Peak", ["Mobility", "Climate tech"], ["Pre-Series A", "Series A"], ["Chennai", "Kochi"]],
+  ["sana", "Sana Kapoor", "Partner", "Mosaic Seed", ["Consumer", "Edtech"], ["Pre-seed", "Seed"], ["Mumbai", "Delhi"]],
+  ["vikram", "Vikram Rao", "Principal", "Foundry Ventures", ["Deeptech", "B2B SaaS"], ["Seed", "Pre-Series A"], ["Bengaluru", "Chennai"]],
+  ["tara", "Tara Joseph", "Angel investor", "Independent", ["Healthtech", "Consumer"], ["Pre-seed", "Seed"], ["Kochi", "Bengaluru"]],
+  ["neel", "Neel Batra", "Partner", "Vector Lake", ["Fintech", "B2B SaaS"], ["Seed", "Series A"], ["Gurugram", "Mumbai"]],
+  ["ishita", "Ishita Sen", "Principal", "Daybreak Fund", ["Agritech", "Climate tech"], ["Pre-seed", "Seed"], ["Indore", "Pune"]],
+  ["rohan", "Rohan Kulkarni", "Managing Director", "Latitude Capital", ["Enterprise AI", "Fintech"], ["Pre-Series A", "Series A"], ["Bengaluru", "Hyderabad"]],
+  ["maya", "Maya Thomas", "Partner", "Juniper Ventures", ["Edtech", "Healthtech"], ["Seed", "Pre-Series A"], ["Noida", "Mumbai"]],
+  ["aditya", "Aditya Khanna", "Angel investor", "Operator Syndicate", ["Mobility", "Deeptech"], ["Pre-seed", "Seed"], ["Delhi", "Chennai"]],
+  ["naina", "Naina Patel", "Principal", "Crescent Seed", ["Consumer", "Fintech"], ["Pre-seed", "Seed"], ["Ahmedabad", "Mumbai"]],
+  ["farhan", "Farhan Ali", "Partner", "Meridian Labs", ["Biotech", "Deeptech"], ["Seed", "Series A"], ["Hyderabad", "Bengaluru"]],
+  ["priya", "Priya Desai", "Investment Director", "Good Ground", ["Climate tech", "Agritech"], ["Pre-Series A", "Series A"], ["Surat", "Pune"]],
+  ["samir", "Samir Jain", "Venture Partner", "Signal House", ["B2B SaaS", "Enterprise AI"], ["Seed", "Pre-Series A"], ["Bengaluru", "Gurugram"]],
+] as const;
+
+export const investors: Investor[] = investorSeeds.map(([id, name, role, firm, sectors, stages, locations], index) => {
+  const portfolioStartupIds = startups.filter((startup, startupIndex) => sectors.some((sector) => sector === startup.sector) && startupIndex % 4 === index % 4).slice(0, 5).map((startup) => startup.id);
+  return {
+    id,
+    profileId: `demo-investor-${String(index + 1).padStart(2, "0")}`,
+    name,
+    initials: name.split(/\s+/).map((part) => part[0]).join("").slice(0, 2),
+    role: `${role}, ${firm}`,
+    firm,
+    bio: `Backs thoughtful founders turning complex ${sectors.join(" and ").toLowerCase()} problems into durable, category-defining companies. Synthetic demo profile.`,
+    sectors: [...sectors],
+    stages: [...stages],
+    locations: [...locations],
+    thesis: `${sectors.join(" · ")} · ${stages.join(" / ")}`,
+    portfolioStartupIds,
+    ticket: index % 3 === 0 ? "₹50L–₹2Cr" : index % 3 === 1 ? "₹2Cr–₹8Cr" : "₹8Cr–₹20Cr",
+    color: colors[(index + 2) % colors.length],
+    poster: pexelsPhoto(index + 20, 900),
+  };
+});
+
+export const demoMembers: DemoMember[] = [
+  ...startups.map((startup, index) => ({
+    id: startup.founderProfileId,
+    name: ["Mira Joshi", "Aarav Sethi", "Nikhil Rao", "Anya Bose", "Karan Gill"][index % 5],
+    role: "founder" as const,
+    headline: `Founder building ${startup.tagline.toLowerCase()}`,
+    company: startup.name,
+    bio: startup.description,
+    color: startup.color,
+    sectors: [startup.sector],
+    stages: [startup.stage],
+    locations: [startup.location],
+    portfolioStartupIds: [],
+  })),
+  ...investors.map((investor) => ({
+    id: investor.profileId,
+    name: investor.name,
+    role: "investor" as const,
+    headline: investor.role,
+    company: investor.firm,
+    bio: investor.bio,
+    color: investor.color,
+    sectors: investor.sectors,
+    stages: investor.stages,
+    locations: investor.locations,
+    portfolioStartupIds: investor.portfolioStartupIds,
+  })),
 ];
 
-export const initialPosts: Post[] = [
-  {
-    id: "post-ember-story",
-    startupId: "embergrid",
-    startup: "EmberGrid",
-    logo: "E",
-    logoColor: "#0f7657",
-    meta: "Climate tech · Bengaluru · 2h",
-    headline: "Making clean energy work after the sun goes down.",
-    body: "We’re building modular thermal batteries that help Indian factories cut energy costs by 40%. Here’s our story in 90 seconds.",
-    tags: ["Climate", "Energy", "SeedRound"],
-    mediaType: "video",
-    mediaUrl: "/videos/founder-room.mp4",
-    poster: "https://images.unsplash.com/photo-1473341304170-971dccb5ac1e?auto=format&fit=crop&w=1400&q=86",
-    mediaLabel: "FOUNDER STORY · 1:28",
-    mediaTitle: "Energy storage, reimagined.",
-    duration: "1:28",
-    likes: 249,
-    shares: 12,
-    comments: [
-      { id: "c1", author: "Rhea Mehta", initials: "RM", role: "Partner, Northstar Ventures", body: "The industrial heat wedge is compelling. Would love to understand the payback period on the first installation.", time: "48m" },
-      { id: "c2", author: "Kabir Shah", initials: "KS", role: "Climate angel", body: "Strong founder clarity—and exactly the kind of hard-tech India should be exporting.", time: "21m" },
-    ],
-  },
-  {
-    id: "post-novi-demo",
-    startupId: "novihealth",
-    startup: "Novi Health",
-    logo: "N",
-    logoColor: "#e67967",
-    meta: "Healthtech · Mumbai · 5h",
-    headline: "A care companion that speaks her language.",
-    body: "Today we crossed 12,000 supported pregnancies across Maharashtra. Our clinical team shares why trust—not technology—is the real product.",
-    tags: ["Healthtech", "India", "Impact"],
-    mediaType: "video",
-    mediaUrl: "/videos/startup-meeting.mp4",
-    poster: "https://images.unsplash.com/photo-1576091160399-112ba8d25d1d?auto=format&fit=crop&w=1400&q=86",
-    mediaLabel: "TEAM STORY · 2:04",
-    mediaTitle: "Care without distance.",
-    duration: "2:04",
-    likes: 184,
-    shares: 26,
-    comments: [
-      { id: "c3", author: "Dev Malhotra", initials: "DM", role: "Principal, Springboard", body: "That retention curve is unusually strong for care delivery. Congratulations to the whole team.", time: "1h" },
-    ],
-  },
-  {
-    id: "post-orbit-milestone",
-    startupId: "orbitpay",
-    startup: "OrbitPay",
-    logo: "O",
-    logoColor: "#6571c7",
-    meta: "Fintech · Gurugram · 1d",
-    headline: "$2.4M moved across 18 currencies—and we’re just getting started.",
-    body: "A year ago this was a spreadsheet and a stubborn problem. Today 86 teams run global vendor payments through OrbitPay. Thank you to every design partner who pushed us forward.",
-    tags: ["Milestone", "Fintech", "GlobalSaaS"],
-    mediaType: "image",
-    mediaUrl: "",
-    poster: "https://images.unsplash.com/photo-1556742049-0cfed4f6a45d?auto=format&fit=crop&w=1400&q=86",
-    mediaLabel: "MILESTONE · JULY 2026",
-    mediaTitle: "Built in India. Moving money worldwide.",
-    likes: 376,
-    shares: 41,
-    comments: [
-      { id: "c4", author: "Aditi Rao", initials: "AR", role: "Founder, LumenWorks", body: "OrbitPay saved our finance team days every month. Thrilled to be an early customer.", time: "8h" },
-    ],
-  },
-  {
-    id: "post-koru-workshop",
-    startupId: "koru",
-    startup: "Koru Robotics",
-    logo: "K",
-    logoColor: "#f0b74f",
-    meta: "Deeptech · Chennai · 1d",
-    headline: "What six months inside a refinery taught us about robot design.",
-    body: "The best prototype wasn’t the smartest one. It was the one an inspection crew could repair with the tools already in their van. A quick look inside this week’s field review.",
-    tags: ["Robotics", "BuildInPublic", "IndustrialTech"],
-    mediaType: "video",
-    mediaUrl: "/videos/team-brainstorm.mp4",
-    poster: "https://images.unsplash.com/photo-1485827404703-89b55fcc595e?auto=format&fit=crop&w=1400&q=86",
-    mediaLabel: "FROM THE WORKSHOP · 0:42",
-    mediaTitle: "Designed with the people who use it.",
-    duration: "0:42",
-    likes: 218,
-    shares: 17,
-    comments: [
-      { id: "c5", author: "Leena Iyer", initials: "LI", role: "Partner, First Light", body: "This is the kind of customer empathy that becomes a technical moat.", time: "5h" },
-      { id: "c6", author: "Omar Siddiqui", initials: "OS", role: "Founder & angel", body: "Would love to see the before-and-after inspection time.", time: "3h" },
-    ],
-  },
-  {
-    id: "post-fieldly-water",
-    startupId: "fieldly",
-    startup: "Fieldly",
-    logo: "F",
-    logoColor: "#6c9d4e",
-    meta: "Agritech · Pune · 2d",
-    headline: "2,800 farms. One lesson: recommendations must arrive at the right moment.",
-    body: "Our sensors matter, but timing matters more. We rebuilt Fieldly around crop moments—not dashboards—and water usage dropped another 8% this season.",
-    tags: ["Agritech", "Water", "ProductLearning"],
-    mediaType: "image",
-    mediaUrl: "",
-    poster: "https://images.unsplash.com/photo-1500382017468-9049fed747ef?auto=format&fit=crop&w=1400&q=86",
-    mediaLabel: "FIELD NOTE · MAHARASHTRA",
-    mediaTitle: "Better decisions, right when they matter.",
-    likes: 302,
-    shares: 34,
-    comments: [
-      { id: "c7", author: "Meera Nair", initials: "MN", role: "VP, Zenith Ventures", body: "The shift from information to timely action is exactly right. Strong progress.", time: "1d" },
-    ],
-  },
-  {
-    id: "post-mindmesh-demo",
-    startupId: "mindmesh",
-    startup: "Mindmesh AI",
-    logo: "M",
-    logoColor: "#8b67b7",
-    meta: "Enterprise AI · Hyderabad · 2d",
-    headline: "Your team already has the answer. We help them find it.",
-    body: "Watch Mindmesh connect a six-month-old architecture decision to today’s incident—in under thirty seconds, with every source attached.",
-    tags: ["EnterpriseAI", "DeveloperTools", "Demo"],
-    mediaType: "video",
-    mediaUrl: "/videos/startup-meeting.mp4",
-    poster: "https://images.unsplash.com/photo-1552664730-d307ca884978?auto=format&fit=crop&w=1400&q=86",
-    mediaLabel: "PRODUCT DEMO · 1:06",
-    mediaTitle: "The context your team thought it lost.",
-    duration: "1:06",
-    likes: 421,
-    shares: 63,
-    comments: [
-      { id: "c8", author: "Kabir Shah", initials: "KS", role: "Operator & angel", body: "Source-backed answers are the important distinction here. Clean demo.", time: "1d" },
-      { id: "c9", author: "Aarav Sethi", initials: "AS", role: "CTO, Stackframe", body: "We’ve been using this for incident reviews. It genuinely changes the meeting.", time: "18h" },
-    ],
-  },
-  {
-    id: "post-rhea-thesis",
-    startupId: "investor-rhea",
-    startup: "Rhea Mehta",
-    logo: "RM",
-    logoColor: "#4f6ff3",
-    meta: "Partner, Northstar Ventures · 3d",
-    headline: "What I’m looking for in climate founders this quarter.",
-    body: "Not another carbon dashboard. I’m excited by teams turning proven science into products operators can deploy without changing how their entire business works. Pre-seed to Seed, India-first with global potential.",
-    tags: ["InvestorThesis", "Climate", "OpenToPitches"],
-    mediaType: "image",
-    mediaUrl: "",
-    poster: "https://images.unsplash.com/photo-1497366754035-f200968a6e72?auto=format&fit=crop&w=1400&q=86",
-    mediaLabel: "INVESTOR NOTE · AUGUST",
-    mediaTitle: "Climate products operators actually want.",
-    likes: 518,
-    shares: 86,
-    comments: [
-      { id: "c10", author: "Mira Joshi", initials: "MJ", role: "Founder, EmberGrid", body: "This framing around deployment friction really resonates.", time: "2d" },
-    ],
-  },
-  {
-    id: "post-novi-hiring",
-    startupId: "novihealth",
-    startup: "Novi Health",
-    logo: "N",
-    logoColor: "#ef806d",
-    meta: "Healthtech · Mumbai · 3d",
-    headline: "We’re hiring our first Head of Clinical Operations.",
-    body: "This person will shape how compassionate, protocol-led care reaches the next 100,000 mothers. Healthcare operations experience matters; curiosity and humility matter more.",
-    tags: ["Hiring", "Healthtech", "Mumbai"],
-    mediaType: "image",
-    mediaUrl: "",
-    poster: "https://images.unsplash.com/photo-1551836022-d5d88e9218df?auto=format&fit=crop&w=1400&q=86",
-    mediaLabel: "JOIN THE TEAM · MUMBAI",
-    mediaTitle: "Help us make care feel closer.",
-    likes: 267,
-    shares: 72,
-    comments: [
-      { id: "c11", author: "Sana Kapoor", initials: "SK", role: "Healthcare operator", body: "Sharing this with two exceptional operators in my network.", time: "2d" },
-    ],
-  },
-  {
-    id: "post-fieldly-founder",
-    startupId: "fieldly",
-    startup: "Fieldly",
-    logo: "F",
-    logoColor: "#6c9d4e",
-    meta: "Agritech · Pune · 4d",
-    headline: "The first version failed in a field before lunch.",
-    body: "Our founder, Nikhil, tells the story of the broken enclosure that forced us to rethink how hardware for Indian farms should actually be built.",
-    tags: ["FounderStory", "Hardware", "Agritech"],
-    mediaType: "video",
-    mediaUrl: "/videos/founder-room.mp4",
-    poster: "https://images.unsplash.com/photo-1464226184884-fa280b87c399?auto=format&fit=crop&w=1400&q=86",
-    mediaLabel: "FOUNDER STORY · 1:34",
-    mediaTitle: "Failure was the first field test.",
-    duration: "1:34",
-    likes: 193,
-    shares: 21,
-    comments: [
-      { id: "c12", author: "Dev Malhotra", initials: "DM", role: "Principal, Springboard", body: "The best founder stories are this specific. Rooting for the team.", time: "3d" },
-    ],
-  },
-  {
-    id: "post-dev-question",
-    startupId: "investor-dev",
-    startup: "Dev Malhotra",
-    logo: "DM",
-    logoColor: "#ff6b4a",
-    meta: "Principal, Springboard · 4d",
-    headline: "Founders: what’s one metric investors consistently misunderstand?",
-    body: "I’m putting together next week’s office-hours session and want to make it useful. Share the metric, why it’s misleading, and what we should ask instead.",
-    tags: ["FounderQuestion", "OfficeHours", "Fundraising"],
-    mediaType: "image",
-    mediaUrl: "",
-    poster: "https://images.unsplash.com/photo-1521737604893-d14cc237f11d?auto=format&fit=crop&w=1400&q=86",
-    mediaLabel: "COMMUNITY QUESTION",
-    mediaTitle: "Help investors ask better questions.",
-    likes: 349,
-    shares: 45,
-    comments: [
-      { id: "c13", author: "Anya Rao", initials: "AR", role: "Founder, Loomly Labs", body: "For marketplaces: repeat GMV without separating supply-acquisition incentives.", time: "3d" },
-      { id: "c14", author: "Rohan Batra", initials: "RB", role: "Founder, Cartwise", body: "Logo retention without showing expansion by customer maturity cohort.", time: "3d" },
-    ],
-  },
-  {
-    id: "post-koru-pilot",
-    startupId: "koru",
-    startup: "Koru Robotics",
-    logo: "K",
-    logoColor: "#f0b74f",
-    meta: "Deeptech · Chennai · 5d",
-    headline: "Pilot number six is live—and this one is 40 metres underground.",
-    body: "Our crawler completed its first autonomous inspection inside a live utility tunnel. Zero shutdown hours, 2.3 kilometres mapped, and one very proud field team.",
-    tags: ["Milestone", "Robotics", "Infrastructure"],
-    mediaType: "image",
-    mediaUrl: "",
-    poster: "https://images.unsplash.com/photo-1518770660439-4636190af475?auto=format&fit=crop&w=1400&q=86",
-    mediaLabel: "MILESTONE · PILOT 06",
-    mediaTitle: "2.3 km mapped without a shutdown.",
-    likes: 612,
-    shares: 104,
-    comments: [
-      { id: "c15", author: "Omar Siddiqui", initials: "OS", role: "Founder & angel", body: "Hard-earned milestone. The field footage must have been incredible.", time: "4d" },
-    ],
-  },
-  {
-    id: "post-ember-people",
-    startupId: "embergrid",
-    startup: "EmberGrid",
-    logo: "E",
-    logoColor: "#ff6b4a",
-    meta: "Climate tech · Bengaluru · 6d",
-    headline: "A company is the conversations it keeps having.",
-    body: "This week: thermal models, factory-floor constraints, three terrible coffee experiments, and the decision that finally made our next module 18% easier to install.",
-    tags: ["Team", "BehindTheScenes", "ClimateTech"],
-    mediaType: "video",
-    mediaUrl: "/videos/team-brainstorm.mp4",
-    poster: "https://images.unsplash.com/photo-1522071820081-009f0129c71c?auto=format&fit=crop&w=1400&q=86",
-    mediaLabel: "BEHIND THE BUILD · 0:38",
-    mediaTitle: "The week between the milestones.",
-    duration: "0:38",
-    likes: 286,
-    shares: 19,
-    comments: [
-      { id: "c16", author: "Leena Iyer", initials: "LI", role: "Partner, First Light", body: "Love seeing the unpolished middle. That’s where companies are made.", time: "5d" },
-    ],
-  },
+const headlines = [
+  "The customer conversation that changed our roadmap.",
+  "What we learned shipping the uncomfortable first version.",
+  "A milestone worth sharing—and the work behind it.",
+  "Why this market is moving faster than it looks.",
+  "Three numbers from our latest operating review.",
+  "The small product decision that unlocked adoption.",
+  "A field note from the people using this every day.",
+  "We are opening our next round to aligned partners.",
+];
+const bodies = [
+  "We spent this week with customers, not slides. The clearest lesson: remove one step, make the value visible, and let trust compound.",
+  "The graph is encouraging, but the best signal was hearing a customer explain the product to a new teammate without us in the room.",
+  "Building in public means sharing the middle: the experiments that failed, the decision that held, and what we will test next.",
+  "We are looking for partners who understand the problem deeply and can help us build a durable company—not simply close a round.",
 ];
 
-export const investors = [
-  { id: "rhea", name: "Rhea Mehta", initials: "RM", role: "Partner, Northstar Ventures", thesis: "Climate · Deeptech · Seed", portfolio: 18, color: "#d97761" },
-  { id: "dev", name: "Dev Malhotra", initials: "DM", role: "Principal, Springboard", thesis: "Healthtech · Consumer · Series A", portfolio: 24, color: "#6672c6" },
-  { id: "kabir", name: "Kabir Shah", initials: "KS", role: "Operator & angel", thesis: "Climate · B2B SaaS · Pre-seed", portfolio: 11, color: "#409170" },
-  { id: "leena", name: "Leena Iyer", initials: "LI", role: "Partner, First Light", thesis: "Fintech · Future of work · Seed", portfolio: 31, color: "#a06ab2" },
-  { id: "omar", name: "Omar Siddiqui", initials: "OS", role: "Founder & angel", thesis: "AI · Developer tools · Seed", portfolio: 15, color: "#b88a3c" },
-  { id: "meera", name: "Meera Nair", initials: "MN", role: "VP, Zenith Ventures", thesis: "Agritech · Climate · Series A", portfolio: 22, color: "#6a9451" },
-];
+export const videoPosts: Post[] = startups.map((startup, index) => ({
+  id: `video-story-${String(index + 1).padStart(2, "0")}`,
+  startupId: startup.id,
+  startup: startup.name,
+  logo: startup.initials,
+  logoColor: startup.color,
+  meta: `${startup.sector} · ${startup.location} · ${index + 1}h`,
+  headline: headlines[index % headlines.length],
+  body: `${startup.tagline} Meet the synthetic founding team and see the problem they are determined to solve.`,
+  tags: startup.tags,
+  mediaType: "video",
+  mediaUrl: ["/videos/founder-room.mp4", "/videos/startup-meeting.mp4", "/videos/team-brainstorm.mp4"][index % 3],
+  poster: startup.poster,
+  mediaLabel: `FOUNDER STORY · ${index + 1}/30`,
+  mediaTitle: startup.tagline,
+  duration: ["0:38", "1:06", "1:28", "0:52"][index % 4],
+  likes: 84 + index * 17,
+  shares: 4 + index * 3,
+  comments: index % 6 === 0 ? [{ id: `video-comment-${index}`, author: investors[index % investors.length].name, initials: investors[index % investors.length].initials, role: investors[index % investors.length].role, body: "Clear story and a thoughtful wedge. I would like to understand the next operating milestone.", time: `${index + 1}h` }] : [],
+  createdAt: NOW - index * 3_600_000,
+  sourceLabel: "Demo footage · synthetic company",
+}));
+
+export const imagePosts: Post[] = Array.from({ length: 200 }, (_, index) => {
+  const startup = startups[index % startups.length];
+  const createdAt = NOW - (index + 2) * 2_700_000;
+  return {
+    id: `photo-update-${String(index + 1).padStart(3, "0")}`,
+    startupId: startup.id,
+    startup: startup.name,
+    logo: startup.initials,
+    logoColor: startup.color,
+    meta: `${startup.sector} · ${startup.location} · ${Math.max(1, Math.floor((NOW - createdAt) / 3_600_000))}h`,
+    headline: headlines[(index + 2) % headlines.length],
+    body: bodies[index % bodies.length],
+    tags: startup.tags,
+    mediaType: "image" as const,
+    mediaUrl: "",
+    poster: pexelsPhoto(index + 3),
+    mediaLabel: index % 4 === 0 ? "BUILDING IN PUBLIC" : index % 4 === 1 ? "TEAM NOTE" : index % 4 === 2 ? "CUSTOMER STORY" : "MILESTONE",
+    mediaTitle: `${startup.name} · update ${index + 1}`,
+    likes: 28 + ((index * 31) % 540),
+    shares: 2 + ((index * 7) % 74),
+    comments: [],
+    createdAt,
+    sourceLabel: "Photo by Pexels · synthetic company",
+    sourceUrl: "https://www.pexels.com/",
+  };
+});
+
+export const initialPosts: Post[] = [...videoPosts, ...imagePosts].sort((a, b) => b.createdAt - a.createdAt);
+
+export const freshStartups: Startup[] = Array.from(new Set(initialPosts.map((post) => post.startupId)))
+  .map((id) => startups.find((startup) => startup.id === id))
+  .filter((startup): startup is Startup => Boolean(startup));

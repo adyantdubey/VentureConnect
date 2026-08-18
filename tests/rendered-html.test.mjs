@@ -71,3 +71,31 @@ test("uses Supabase email/password auth end to end", async () => {
 
   assert.doesNotMatch(`${client}\n${server}`, /service[_-]?role/i);
 });
+
+test("ships the expanded demo network and interaction foundations", async () => {
+  const [data, app, messages, meetings, calls, schema] = await Promise.all([
+    readFile(new URL("../app/synthetic-data.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/innovestart-app.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/messages/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/meetings/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/calls/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../db/schema.ts", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(data, /startupSeeds = \[/);
+  assert.equal((data.match(/^  \["[a-z]/gm) ?? []).length, 50);
+  assert.match(data, /length: 200/);
+  assert.match(data, /export const videoPosts: Post\[\] = startups\.map/);
+  assert.match(data, /Photo by Pexels · synthetic company/);
+
+  assert.match(app, /function ReelsView/);
+  assert.match(app, /className="media-wrap inline-video"/);
+  assert.match(app, /All locations/);
+  assert.match(app, /function InvestorProfileModal/);
+  assert.match(app, /function CallModal/);
+  assert.match(messages, /score >= 2 \? "primary" : score === 1 \? "secondary" : "request"/);
+  assert.match(messages, /member\.role === "investor" \? "primary"/);
+  assert.match(meetings, /status = 'booked'.*status = 'open'/s);
+  assert.match(calls, /offer_json/);
+  assert.match(schema, /callCandidates/);
+});

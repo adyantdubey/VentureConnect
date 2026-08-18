@@ -9,6 +9,11 @@ export type MemberProfile = {
   headline: string;
   company: string;
   bio: string;
+  avatarColor: string;
+  sectors: string[];
+  stages: string[];
+  locations: string[];
+  portfolioStartupIds: string[];
   onboardingComplete: boolean;
 };
 
@@ -20,6 +25,11 @@ type ProfileRow = {
   headline: string | null;
   company: string | null;
   bio: string | null;
+  avatar_color: string | null;
+  sectors_json: string | null;
+  stages_json: string | null;
+  locations_json: string | null;
+  portfolio_startup_ids_json: string | null;
   onboarding_complete: number;
 };
 
@@ -29,7 +39,7 @@ export async function getCurrentMember(options: { create?: boolean } = {}): Prom
   await ensureDatabase();
   const d1 = getD1();
   let row = await d1
-    .prepare("SELECT id, email, display_name, role, headline, company, bio, onboarding_complete FROM profiles WHERE id = ?")
+    .prepare("SELECT id, email, display_name, role, headline, company, bio, avatar_color, sectors_json, stages_json, locations_json, portfolio_startup_ids_json, onboarding_complete FROM profiles WHERE id = ?")
     .bind(identity.userId)
     .first<ProfileRow>();
 
@@ -47,6 +57,11 @@ export async function getCurrentMember(options: { create?: boolean } = {}): Prom
       headline: "",
       company: "",
       bio: "",
+      avatar_color: "#5567d8",
+      sectors_json: "[]",
+      stages_json: "[]",
+      locations_json: "[]",
+      portfolio_startup_ids_json: "[]",
       onboarding_complete: 0,
     };
   } else if (row && row.email !== identity.email) {
@@ -74,6 +89,20 @@ function mapProfile(row: ProfileRow): MemberProfile {
     headline: row.headline ?? "",
     company: row.company ?? "",
     bio: row.bio ?? "",
+    avatarColor: row.avatar_color ?? "#5567d8",
+    sectors: parseList(row.sectors_json),
+    stages: parseList(row.stages_json),
+    locations: parseList(row.locations_json),
+    portfolioStartupIds: parseList(row.portfolio_startup_ids_json),
     onboardingComplete: Boolean(row.onboarding_complete),
   };
+}
+
+function parseList(value: string | null): string[] {
+  try {
+    const parsed = JSON.parse(value ?? "[]");
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
+  } catch {
+    return [];
+  }
 }

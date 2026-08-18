@@ -89,6 +89,7 @@ export async function POST(request: Request) {
       likes: 0,
       shares: 0,
       comments: [],
+      createdAt: Date.now(),
       ownedByViewer: true,
     };
     await getD1().prepare("INSERT INTO community_posts (id, author_profile_id, startup_id, media_asset_id, payload, created_at) VALUES (?, ?, ?, ?, ?, ?)")

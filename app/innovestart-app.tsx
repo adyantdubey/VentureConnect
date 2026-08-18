@@ -9,6 +9,8 @@ import {
   Bookmark,
   BriefcaseBusiness,
   CalendarDays,
+  CalendarCheck,
+  Camera,
   Check,
   ChevronDown,
   CircleDollarSign,
@@ -23,8 +25,12 @@ import {
   MapPin,
   Menu,
   MessageCircle,
+  Mic,
+  MicOff,
   MoreHorizontal,
   Play,
+  Phone,
+  PhoneOff,
   Plus,
   Rocket,
   Search,
@@ -37,13 +43,14 @@ import {
   UserPlus,
   Users,
   Video,
+  VideoOff,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { initialPosts, investors, Post, startups, type CommentItem, type Startup } from "./synthetic-data";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { freshStartups, initialPosts, investors, Post, startups, videoPosts, type CommentItem, type Investor, type Startup } from "./synthetic-data";
 import { authenticatedFetch, getSupabaseAccessToken, supabase } from "./supabase-client";
 
-type View = "home" | "discover" | "messages" | "network";
+type View = "home" | "reels" | "discover" | "messages" | "network";
 type Role = "investor" | "founder";
 type Viewer = {
   id: string;
@@ -55,6 +62,11 @@ type Viewer = {
   headline: string;
   company: string;
   bio: string;
+  avatarColor: string;
+  sectors: string[];
+  stages: string[];
+  locations: string[];
+  portfolioStartupIds: string[];
   onboardingComplete: boolean;
 };
 type ProfilePayload = {
@@ -65,17 +77,23 @@ type ProfilePayload = {
   headline: string;
   company: string;
   bio: string;
+  avatarColor: string;
+  sectors: string[];
+  stages: string[];
+  locations: string[];
+  portfolioStartupIds: string[];
   onboardingComplete: boolean;
 };
 type UploadedAsset = { id: string; url: string; fileName: string; contentType: string; mediaType: "video" | "image"; sizeBytes: number };
 type PostDraft = { headline: string; body: string; tags: string; media?: UploadedAsset };
-type ProfileDraft = { displayName: string; role: Role; headline: string; company: string; bio: string };
+type ProfileDraft = { displayName: string; role: Role; headline: string; company: string; bio: string; sectors: string[]; stages: string[]; locations: string[] };
 type AuthMode = "signin" | "signup" | "forgot" | "reset";
+type CallPayload = { id: string; callerProfileId: string; calleeProfileId: string; callerName?: string; callerColor?: string; conversationId?: string; mode: "voice" | "video"; status: "ringing" | "active" | "declined" | "ended"; offer?: RTCSessionDescriptionInit | null; answer?: RTCSessionDescriptionInit | null };
 
 function viewerFromProfile(profile: ProfilePayload): Viewer {
   const initials = profile.displayName.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase() || "IN";
   const fallback = profile.role === "founder" ? (profile.company ? `Founder · ${profile.company}` : "Startup founder") : (profile.company ? `Investor · ${profile.company}` : "Startup investor");
-  return { id: profile.id, email: profile.email, name: profile.displayName, initials, title: profile.headline || fallback, role: profile.role, headline: profile.headline, company: profile.company, bio: profile.bio, onboardingComplete: profile.onboardingComplete };
+  return { id: profile.id, email: profile.email, name: profile.displayName, initials, title: profile.headline || fallback, role: profile.role, headline: profile.headline, company: profile.company, bio: profile.bio, avatarColor: profile.avatarColor, sectors: profile.sectors, stages: profile.stages, locations: profile.locations, portfolioStartupIds: profile.portfolioStartupIds, onboardingComplete: profile.onboardingComplete };
 }
 
 function Logo({ compact = false }: { compact?: boolean }) {
@@ -90,6 +108,15 @@ function Logo({ compact = false }: { compact?: boolean }) {
 function Avatar({ initials, color, size = "normal" }: { initials: string; color?: string; size?: "small" | "normal" | "large" }) {
   return <span className={`avatar avatar-${size}`} style={color ? { background: color } : undefined}>{initials}</span>;
 }
+
+const initials = (name: string) => name.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase() || "IN";
+const relativeTimeLabel = (timestamp: number) => {
+  const minutes = Math.max(0, Math.floor((Date.now() - timestamp) / 60_000));
+  if (minutes < 1) return "now";
+  if (minutes < 60) return `${minutes}m`;
+  if (minutes < 1_440) return `${Math.floor(minutes / 60)}h`;
+  return `${Math.floor(minutes / 1_440)}d`;
+};
 
 function StartupLogo({ startup, size = "normal" }: { startup: Pick<Startup, "initials" | "color">; size?: "small" | "normal" | "large" }) {
   return <span className={`startup-logo logo-${size}`} style={{ background: startup.color }}>{startup.initials}</span>;
@@ -116,7 +143,6 @@ export default function InnovestartApp() {
   const [authChecking, setAuthChecking] = useState(true);
   const [composerOpen, setComposerOpen] = useState(false);
   const [selectedStartup, setSelectedStartup] = useState<Startup | null>(null);
-  const [selectedVideo, setSelectedVideo] = useState<Post | null>(null);
   const [posts, setPosts] = useState<Post[]>(initialPosts);
   const [liked, setLiked] = useState<Set<string>>(new Set());
   const [saved, setSaved] = useState<Set<string>>(new Set());
@@ -384,7 +410,7 @@ export default function InnovestartApp() {
 
   const displayPosts = useMemo(() => {
     if (feedFilter === "Following") return posts.filter((post) => following.has(post.startupId));
-    if (feedFilter === "Newest") return [...posts].reverse();
+    if (feedFilter === "Newest") return [...posts].sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
     return posts;
   }, [feedFilter, following, posts]);
 
@@ -395,6 +421,7 @@ export default function InnovestartApp() {
         <button className="logo-button" onClick={() => goTo("home")} aria-label="Innovestart home"><Logo /></button>
         <nav className={`main-nav ${mobileMenu ? "mobile-open" : ""}`} aria-label="Primary navigation">
           <NavButton active={view === "home"} icon={<Home />} label="Home" onClick={() => goTo("home")} />
+          <NavButton active={view === "reels"} icon={<Play />} label="Reels" onClick={() => goTo("reels")} />
           <NavButton active={view === "discover"} icon={<Compass />} label="Discover" onClick={() => goTo("discover")} />
           <NavButton active={view === "messages"} icon={<MessageCircle />} label="Messages" onClick={() => goTo("messages")} />
           <NavButton active={view === "network"} icon={<Users />} label="Network" onClick={() => goTo("network")} />
@@ -451,21 +478,20 @@ export default function InnovestartApp() {
           onCommentDraft={(id, value) => setCommentDrafts((current) => ({ ...current, [id]: value }))}
           onComment={addComment}
           onStartup={setSelectedStartup}
-          onPlay={setSelectedVideo}
           onDelete={deletePost}
           onUtility={setToast}
           onNavigate={goTo}
         />
       )}
+      {view === "reels" && <ReelsView posts={videoPosts} liked={liked} saved={saved} onLike={toggleLike} onSave={toggleSave} onShare={sharePost} onStartup={setSelectedStartup} />}
       {view === "discover" && <DiscoverView following={following} onFollow={toggleFollow} onStartup={setSelectedStartup} />}
       {view === "messages" && <MessagesView viewer={viewer} onAuth={() => { setAuthMode("signin"); setAuthOpen(true); }} />}
-      {view === "network" && <NetworkView viewer={viewer} onAuth={() => { setAuthMode("signin"); setAuthOpen(true); }} />}
+      {view === "network" && <NetworkView viewer={viewer} onAuth={() => { setAuthMode("signin"); setAuthOpen(true); }} onMessage={(profileId) => { window.localStorage.setItem("innovestart-message-recipient", profileId); goTo("messages"); }} />}
 
       {authOpen && <AuthModal key={authMode} role={role} setRole={setRole} initialMode={authMode} onClose={() => setAuthOpen(false)} onAuthenticated={authenticated} />}
       {profileOpen && viewer && <ProfileModal viewer={viewer} required={!viewer.onboardingComplete} onClose={() => viewer.onboardingComplete && setProfileOpen(false)} onSave={saveProfile} />}
       {composerOpen && viewer && <ComposerModal viewer={viewer} onClose={() => setComposerOpen(false)} onSubmit={submitPost} />}
       {selectedStartup && <StartupModal startup={selectedStartup} followed={following.has(selectedStartup.id)} onClose={() => setSelectedStartup(null)} onFollow={() => toggleFollow(selectedStartup.id, selectedStartup.name)} onMessage={() => { if (requireAuth()) { setSelectedStartup(null); goTo("messages"); setToast(`Conversation with ${selectedStartup.name} opened`); } }} />}
-      {selectedVideo && <VideoModal post={selectedVideo} onClose={() => setSelectedVideo(null)} />}
       {toast && <div className="toast"><Check size={16} />{toast}</div>}
     </main>
   );
@@ -497,7 +523,6 @@ type HomeViewProps = {
   onCommentDraft: (id: string, value: string) => void;
   onComment: (id: string) => void;
   onStartup: (startup: Startup) => void;
-  onPlay: (post: Post) => void;
   onDelete: (post: Post) => void;
   onUtility: (message: string) => void;
   onNavigate: (view: View) => void;
@@ -531,7 +556,7 @@ function HomeView(props: HomeViewProps) {
 
         <section className="story-tray" aria-label="Fresh stories">
           <div className="story-tray-title"><span>Fresh from founders</span><small>Tap a company to explore</small></div>
-          <div className="story-list">{startups.slice(0, 6).map((startup, index) => <button key={startup.id} onClick={() => props.onStartup(startup)}><span className={`story-ring story-${index % 4}`}><StartupLogo startup={startup} size="small" /></span><strong>{startup.name}</strong><small>{index % 3 === 0 ? "New pitch" : index % 3 === 1 ? "Milestone" : "Founder note"}</small></button>)}</div>
+          <div className="story-list">{freshStartups.slice(0, 10).map((startup, index) => <button key={startup.id} onClick={() => props.onStartup(startup)}><span className={`story-ring story-${index % 4}`}><StartupLogo startup={startup} size="small" /></span><strong>{startup.name}</strong><small>{index % 3 === 0 ? "New pitch" : index % 3 === 1 ? "Milestone" : "Founder note"}</small></button>)}</div>
         </section>
 
         <section className="composer card">
@@ -563,16 +588,17 @@ function HomeView(props: HomeViewProps) {
                 <div className="tag-row">{post.tags.map((tag) => <span key={tag}>#{tag}</span>)}</div>
               </div>
               {post.mediaType === "video" && post.mediaUrl ? (
-                <button className="media-wrap video-cover" onClick={() => props.onPlay(post)} aria-label={`Play ${post.startup} video: ${post.mediaTitle}`} style={{ backgroundImage: `linear-gradient(180deg, rgba(17,29,51,.02), rgba(17,29,51,.7)), url(${post.poster})` }}>
-                  <span className="large-play"><Play size={20} fill="currentColor" /></span>
+                <div className="media-wrap inline-video">
+                  <video controls playsInline preload="metadata" poster={post.poster} aria-label={`${post.startup}: ${post.mediaTitle}`}><source src={post.mediaUrl} type="video/mp4" /></video>
                   <span className="media-copy"><span>{post.mediaLabel}</span><strong>{post.mediaTitle}</strong></span>
                   <span className="duration">{post.duration}</span>
-                </button>
+                </div>
               ) : post.mediaType === "image" && (post.poster || post.mediaUrl) ? (
                 <div className="media-wrap image-media" style={{ backgroundImage: `url(${post.poster || post.mediaUrl})` }} role="img" aria-label={post.mediaTitle}>
                   <div className="media-copy"><span>{post.mediaLabel}</span><strong>{post.mediaTitle}</strong></div>
                 </div>
               ) : null}
+              {post.sourceLabel && <div className="media-provenance">{post.sourceUrl ? <a href={post.sourceUrl} target="_blank" rel="noreferrer">{post.sourceLabel}</a> : post.sourceLabel}</div>}
               <div className="engagement-summary"><span><span className="reaction-stack"><Heart size={10} fill="currentColor" /><Sparkles size={10} /></span>{post.likes + (props.liked.has(post.id) ? 1 : 0)} people reacted</span><button onClick={() => props.onComments(post.id)}>{comments.length} comments</button><span>{post.shares + (props.shared[post.id] ?? 0)} shares</span></div>
               <div className="engagement-actions">
                 <button className={props.liked.has(post.id) ? "engaged" : ""} onClick={() => props.onLike(post.id)}><Heart size={17} fill={props.liked.has(post.id) ? "currentColor" : "none"} /> Like</button>
@@ -621,6 +647,10 @@ function CompactStartup({ startup, followed, onFollow, onOpen }: { startup: Star
   return <div className="startup-row"><button className="logo-button" onClick={onOpen}><StartupLogo startup={startup} size="small" /></button><button className="startup-row-copy" onClick={onOpen}><strong>{startup.name}</strong><span>{startup.sector} · {startup.stage}</span><small><i className="growth-dot" /> {startup.signal}</small></button><button className={`round-follow ${followed ? "active" : ""}`} onClick={onFollow} aria-label={`${followed ? "Unfollow" : "Follow"} ${startup.name}`}>{followed ? <Check size={14} /> : <Plus size={15} />}</button></div>;
 }
 
+function ReelsView({ posts, liked, saved, onLike, onSave, onShare, onStartup }: { posts: Post[]; liked: Set<string>; saved: Set<string>; onLike: (id: string) => void; onSave: (id: string) => void; onShare: (post: Post) => void; onStartup: (startup: Startup) => void }) {
+  return <div className="reels-page"><header className="reels-header"><div><span className="eyebrow">30 FOUNDER STORIES</span><h1>Watch the story,<br />not just the pitch.</h1></div><p>Scroll vertically through startup introductions. Videos play in place, with the company context kept close.</p></header><section className="reels-stream" aria-label="Startup reels">{posts.map((post, index) => { const startup = startups.find((item) => item.id === post.startupId); return <article className="reel-card" key={post.id}><video controls playsInline preload={index < 2 ? "metadata" : "none"} poster={post.poster} aria-label={`${post.startup}: ${post.mediaTitle}`}><source src={post.mediaUrl} type="video/mp4" /></video><div className="reel-shade" /><div className="reel-copy"><button onClick={() => startup && onStartup(startup)}><span className="startup-logo logo-small" style={{ background: post.logoColor }}>{post.logo}</span><span><strong>{post.startup} <BadgeCheck size={14} /></strong><small>{post.meta.split(" · ").slice(0, 2).join(" · ")}</small></span></button><h2>{post.mediaTitle}</h2><p>{post.body}</p><div>{post.tags.slice(0, 3).map((tag) => <span key={tag}>#{tag}</span>)}</div><small>{post.sourceLabel}</small></div><aside className="reel-actions"><button className={liked.has(post.id) ? "active" : ""} onClick={() => onLike(post.id)}><Heart size={21} fill={liked.has(post.id) ? "currentColor" : "none"} /><span>{post.likes + (liked.has(post.id) ? 1 : 0)}</span></button><button onClick={() => onShare(post)}><Share2 size={21} /><span>Share</span></button><button className={saved.has(post.id) ? "active" : ""} onClick={() => onSave(post.id)}><Bookmark size={21} fill={saved.has(post.id) ? "currentColor" : "none"} /><span>Save</span></button></aside><span className="reel-count">{String(index + 1).padStart(2, "0")} / 30</span></article>; })}</section></div>;
+}
+
 function DiscoverView({ following, onFollow, onStartup }: { following: Set<string>; onFollow: (id: string, name: string) => void; onStartup: (startup: Startup) => void }) {
   const [sector, setSector] = useState("All sectors");
   const [stage, setStage] = useState("All stages");
@@ -632,22 +662,200 @@ function DiscoverView({ following, onFollow, onStartup }: { following: Set<strin
 }
 
 function MessagesView({ viewer, onAuth }: { viewer: Viewer | null; onAuth: () => void }) {
-  const [active, setActive] = useState(0);
+  type Contact = { id: string; name: string; role: Role; headline: string; company: string; color: string; sectors?: string[]; stages?: string[]; locations?: string[] };
+  type Conversation = { id: string; inboxTier: "primary" | "secondary" | "request"; lastMessageAt: number; other: Contact; preview: string; unreadCount: number };
+  type MessageItem = { id: string; senderProfileId: string; recipientProfileId: string; senderName: string; body: string; createdAt: number };
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [contacts, setContacts] = useState<Contact[]>([]);
+  const [messages, setMessages] = useState<MessageItem[]>([]);
+  const [activeId, setActiveId] = useState("");
+  const [target, setTarget] = useState<Contact | null>(null);
+  const [tier, setTier] = useState<"primary" | "secondary" | "request">("primary");
   const [draft, setDraft] = useState("");
-  const [sent, setSent] = useState<string[]>([]);
-  const chats = [{ name: "Mira at EmberGrid", initials: "ME", preview: "Happy to share our pilot economics.", time: "12m", color: "#0f7657" }, { name: "Rhea Mehta", initials: "RM", preview: "I’ll send the intro shortly.", time: "2h", color: "#d97761" }, { name: "OrbitPay team", initials: "OP", preview: "Thursday afternoon works for us.", time: "1d", color: "#6571c7" }];
+  const [composing, setComposing] = useState(false);
+  const [query, setQuery] = useState("");
+  const [status, setStatus] = useState("Loading conversations…");
+  const [meetingInvestor, setMeetingInvestor] = useState<Investor | null>(null);
+  const [call, setCall] = useState<{ target: Contact; mode: "voice" | "video"; incomingCall?: CallPayload } | null>(null);
+  const loadInbox = useCallback(async () => {
+    const response = await authenticatedFetch("/api/messages");
+    if (!response.ok) return;
+    const payload = await response.json() as { conversations?: Conversation[]; contacts?: Contact[] };
+    setConversations(payload.conversations ?? []); setContacts(payload.contacts ?? []); setStatus(payload.conversations?.length ? "" : "Start a focused founder–investor conversation.");
+  }, []);
+  const loadThread = useCallback(async (id: string) => {
+    const response = await authenticatedFetch(`/api/messages?conversationId=${encodeURIComponent(id)}`);
+    if (!response.ok) return;
+    const payload = await response.json() as { messages?: MessageItem[] };
+    setMessages(payload.messages ?? []);
+  }, []);
+  useEffect(() => {
+    if (!viewer) return;
+    const kickoff = window.setTimeout(loadInbox, 0);
+    const timer = window.setInterval(loadInbox, 10_000);
+    return () => { window.clearTimeout(kickoff); window.clearInterval(timer); };
+  }, [loadInbox, viewer]);
+  useEffect(() => { if (!activeId) return; const kickoff = window.setTimeout(() => loadThread(activeId), 0); return () => window.clearTimeout(kickoff); }, [activeId, loadThread]);
+  useEffect(() => {
+    if (!viewer || !contacts.length) return;
+    const pending = window.localStorage.getItem("innovestart-message-recipient");
+    const contact = contacts.find((item) => item.id === pending);
+    if (!contact) return;
+    const kickoff = window.setTimeout(() => { setTarget(contact); setComposing(false); setMessages([]); window.localStorage.removeItem("innovestart-message-recipient"); const existing = conversations.find((item) => item.other.id === contact.id); setActiveId(existing?.id ?? ""); }, 0);
+    return () => window.clearTimeout(kickoff);
+  }, [contacts, conversations, viewer]);
+  useEffect(() => {
+    if (!viewer) return;
+    const poll = async () => {
+      const response = await authenticatedFetch("/api/calls"); if (!response.ok) return;
+      const payload = await response.json() as { incoming?: CallPayload | null };
+      if (payload.incoming && !call) {
+        const caller = contacts.find((item) => item.id === payload.incoming?.callerProfileId);
+        if (caller) setCall({ target: caller, mode: payload.incoming.mode, incomingCall: payload.incoming });
+      }
+    };
+    poll(); const timer = window.setInterval(poll, 5_000); return () => window.clearInterval(timer);
+  }, [call, contacts, viewer]);
   if (!viewer) return <GatedView icon={<MessageCircle size={30} />} title="Turn interest into a conversation." body="Sign in to message founders, ask useful questions, and keep every promising connection in one place." onAuth={onAuth} />;
-  const chat = chats[active];
-  const send = () => { if (!draft.trim()) return; setSent((current) => [...current, draft.trim()]); setDraft(""); };
-  return <div className="workspace-page"><div className="page-title-row"><div><span className="eyebrow">PRIVATE & FOCUSED</span><h1>Messages</h1><p>Founder conversations and warm introductions.</p></div><button className="primary-wide"><Plus size={15} /> New message</button></div><section className="messages-shell card"><aside className="chat-list"><div className="chat-list-head"><strong>Inbox</strong><button><Search size={16} /></button></div>{chats.map((item, index) => <button className={`chat-row ${active === index ? "active" : ""}`} key={item.name} onClick={() => setActive(index)}><Avatar initials={item.initials} color={item.color} /><span><strong>{item.name}</strong><small>{item.preview}</small></span><time>{item.time}</time></button>)}</aside><div className="conversation"><header><Avatar initials={chat.initials} color={chat.color} /><div><strong>{chat.name}</strong><span><i /> Active today</span></div><button><MoreHorizontal size={19} /></button></header><div className="message-thread"><div className="message-day">TODAY</div><div className="message incoming">Thanks for following our story. Which part of EmberGrid are you most curious about?<time>10:18 AM</time></div><div className="message outgoing">The seven paid pilots stood out. I&apos;d love to understand deployment economics and the typical payback period.<time>10:24 AM</time></div><div className="message incoming">Happy to share our pilot economics. I&apos;ve attached the sanitized cohort view for you.<div className="attachment"><LineChart size={19} /><span><strong>Pilot economics</strong><small>PDF · 2.4 MB</small></span></div><time>10:31 AM</time></div>{sent.map((item, index) => <div className="message outgoing" key={`${item}-${index}`}>{item}<time>now</time></div>)}</div><div className="message-composer"><button><Plus size={18} /></button><input value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") send(); }} placeholder="Write a message..." /><button className="send-button" onClick={send}><Send size={17} /></button></div></div></section></div>;
+  const filteredConversations = conversations.filter((item) => item.inboxTier === tier);
+  const activeConversation = conversations.find((item) => item.id === activeId);
+  const activeContact = target ?? activeConversation?.other ?? null;
+  const send = async () => {
+    if (!draft.trim() || !activeContact) return;
+    const body = draft.trim(); setDraft("");
+    const response = await authenticatedFetch("/api/messages", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ conversationId: activeId || undefined, recipientProfileId: activeContact.id, body }) });
+    const payload = await response.json() as { message?: MessageItem & { conversationId: string }; error?: string; inboxTier?: string };
+    if (!response.ok || !payload.message) { setStatus(payload.error || "Unable to send the message."); setDraft(body); return; }
+    setMessages((current) => [...current, payload.message!]); setActiveId(payload.message.conversationId); setTarget(activeContact); setStatus(`Delivered to ${payload.inboxTier ?? "primary"} inbox`); await loadInbox();
+  };
+  const availableContacts = contacts.filter((item) => item.role !== viewer.role && `${item.name} ${item.company} ${item.headline}`.toLowerCase().includes(query.toLowerCase()));
+  const investorFor = activeContact?.role === "investor" ? investors.find((item) => item.profileId === activeContact.id) ?? null : null;
+  return <div className="workspace-page"><div className="page-title-row"><div><span className="eyebrow">PRIVATE & FOCUSED</span><h1>Messages</h1><p>Real two-way conversations, protected by relevance-aware routing.</p></div><button className="primary-wide" onClick={() => setComposing(true)}><Plus size={15} /> New message</button></div><section className="messages-shell card"><aside className="chat-list"><div className="inbox-tier-tabs">{(["primary", "secondary", "request"] as const).map((item) => <button key={item} className={tier === item ? "active" : ""} onClick={() => setTier(item)}>{item === "request" ? "Requests" : `${item[0].toUpperCase()}${item.slice(1)}`}<b>{conversations.filter((chat) => chat.inboxTier === item).length}</b></button>)}</div><div className="chat-list-head"><strong>Inbox</strong><button onClick={() => setComposing(true)}><Search size={16} /></button></div>{filteredConversations.map((item) => <button className={`chat-row ${activeId === item.id ? "active" : ""}`} key={item.id} onClick={() => { setActiveId(item.id); setTarget(item.other); }}><Avatar initials={initials(item.other.name)} color={item.other.color} /><span><strong>{item.other.name}</strong><small>{item.preview}</small></span><time>{relativeTimeLabel(item.lastMessageAt)}{item.unreadCount > 0 && <b>{item.unreadCount}</b>}</time></button>)}{!filteredConversations.length && <p className="empty-inbox">No {tier} conversations yet.</p>}</aside><div className="conversation">{activeContact ? <><header><Avatar initials={initials(activeContact.name)} color={activeContact.color} /><div><strong>{activeContact.name}</strong><span><i /> {activeContact.headline || activeContact.company}</span></div><div className="call-actions"><button aria-label="Start voice call" onClick={() => setCall({ target: activeContact, mode: "voice" })}><Phone size={17} /></button><button aria-label="Start video call" onClick={() => setCall({ target: activeContact, mode: "video" })}><Camera size={18} /></button>{investorFor && <button aria-label="Schedule meeting" onClick={() => setMeetingInvestor(investorFor)}><CalendarDays size={18} /></button>}</div></header><div className="message-thread">{messages.length > 0 && <div className="message-day">PRIVATE THREAD</div>}{messages.map((item) => <div className={`message ${item.senderProfileId === viewer.id ? "outgoing" : "incoming"}`} key={item.id}>{item.body}<time>{new Intl.DateTimeFormat("en-IN", { hour: "numeric", minute: "2-digit" }).format(item.createdAt)}</time></div>)}{!messages.length && <div className="conversation-empty"><MessageCircle size={30} /><h3>Start with context.</h3><p>Explain why the company or thesis is relevant. The inbox router will place the first message automatically.</p></div>}</div><div className="message-delivery-note">{status}</div><div className="message-composer"><button><Plus size={18} /></button><input value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") send(); }} placeholder={`Message ${activeContact.name}…`} /><button className="send-button" onClick={send}><Send size={17} /></button></div></> : <div className="conversation-empty full"><MessageCircle size={34} /><h3>Select a conversation</h3><p>Or start a new founder–investor introduction.</p></div>}</div></section>{composing && <div className="new-message-popover card"><div><strong>New conversation</strong><button onClick={() => setComposing(false)}><X size={16} /></button></div><label><Search size={15} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={`Search ${viewer.role === "founder" ? "investors" : "startups"}…`} /></label><div>{availableContacts.slice(0, 30).map((contact) => <button key={contact.id} onClick={() => { setTarget(contact); setMessages([]); setActiveId(conversations.find((item) => item.other.id === contact.id)?.id ?? ""); setComposing(false); }}><Avatar initials={initials(contact.name)} color={contact.color} /><span><strong>{contact.name}</strong><small>{contact.headline || contact.company}</small></span><ArrowUpRight size={15} /></button>)}</div></div>}{meetingInvestor && <ScheduleMeetingModal investor={meetingInvestor} conversationId={activeId} onClose={() => setMeetingInvestor(null)} />}{call && <CallModal target={call.target} mode={call.mode} incomingCall={call.incomingCall} conversationId={activeId} onClose={() => setCall(null)} />}</div>;
 }
 
-function NetworkView({ viewer, onAuth }: { viewer: Viewer | null; onAuth: () => void }) {
+function CallModal({ target, mode, incomingCall, conversationId, onClose }: { target: { id: string; name: string; color: string }; mode: "voice" | "video"; incomingCall?: CallPayload; conversationId?: string; onClose: () => void }) {
+  const localVideo = useRef<HTMLVideoElement>(null);
+  const remoteVideo = useRef<HTMLVideoElement>(null);
+  const peer = useRef<RTCPeerConnection | null>(null);
+  const stream = useRef<MediaStream | null>(null);
+  const callId = useRef(incomingCall?.id ?? "");
+  const processedCandidates = useRef(new Set<string>());
+  const pendingCandidates = useRef<RTCIceCandidateInit[]>([]);
+  const [state, setState] = useState(incomingCall ? `${target.name} is calling…` : `Ready to call ${target.name}`);
+  const [started, setStarted] = useState(false);
+  const [muted, setMuted] = useState(false);
+  const [cameraOff, setCameraOff] = useState(mode === "voice");
+
+  const postSignal = useCallback(async (payload: Record<string, unknown>) => {
+    return authenticatedFetch("/api/calls", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
+  }, []);
+
+  const begin = async () => {
+    try {
+      setState("Requesting camera and microphone…");
+      const media = await navigator.mediaDevices.getUserMedia({ audio: true, video: mode === "video" });
+      stream.current = media;
+      if (localVideo.current) localVideo.current.srcObject = media;
+      const connection = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+      peer.current = connection;
+      media.getTracks().forEach((track) => connection.addTrack(track, media));
+      connection.ontrack = (event) => { if (remoteVideo.current) remoteVideo.current.srcObject = event.streams[0]; setState(`Connected with ${target.name}`); };
+      connection.onconnectionstatechange = () => { if (connection.connectionState === "connected") setState(`Connected with ${target.name}`); if (["failed", "disconnected"].includes(connection.connectionState)) setState("Connection interrupted"); };
+      connection.onicecandidate = (event) => {
+        if (!event.candidate) return;
+        const candidate = event.candidate.toJSON();
+        if (callId.current) postSignal({ action: "candidate", callId: callId.current, candidate }); else pendingCandidates.current.push(candidate);
+      };
+
+      if (incomingCall?.offer) {
+        await connection.setRemoteDescription(incomingCall.offer);
+        const answer = await connection.createAnswer(); await connection.setLocalDescription(answer);
+        await postSignal({ action: "answer", callId: incomingCall.id, description: answer });
+        setState(`Connecting with ${target.name}…`);
+      } else {
+        const offer = await connection.createOffer(); await connection.setLocalDescription(offer);
+        const response = await postSignal({ action: "start", calleeProfileId: target.id, conversationId, mode, description: offer });
+        const payload = await response.json() as { callId?: string; error?: string };
+        if (!response.ok || !payload.callId) throw new Error(payload.error || "Unable to start the call.");
+        callId.current = payload.callId;
+        await Promise.all(pendingCandidates.current.map((candidate) => postSignal({ action: "candidate", callId: callId.current, candidate })));
+        pendingCandidates.current = [];
+        setState(`Calling ${target.name}…`);
+      }
+      setStarted(true);
+    } catch (error) {
+      setState(error instanceof Error ? error.message : "Camera or microphone access was not available.");
+    }
+  };
+
+  useEffect(() => {
+    if (!started || !callId.current) return;
+    const poll = window.setInterval(async () => {
+      const response = await authenticatedFetch(`/api/calls?callId=${encodeURIComponent(callId.current)}`);
+      if (!response.ok || !peer.current) return;
+      const payload = await response.json() as { call?: CallPayload; candidates?: Array<{ id: string; candidate: RTCIceCandidateInit }> };
+      if (payload.call?.status === "declined") setState(`${target.name} declined the call`);
+      if (payload.call?.status === "ended") setState("Call ended");
+      if (payload.call?.answer && !peer.current.remoteDescription) await peer.current.setRemoteDescription(payload.call.answer);
+      for (const item of payload.candidates ?? []) if (!processedCandidates.current.has(item.id)) { processedCandidates.current.add(item.id); await peer.current.addIceCandidate(item.candidate).catch(() => undefined); }
+    }, 1_500);
+    return () => window.clearInterval(poll);
+  }, [started, target.name]);
+
+  const finish = async (status: "declined" | "ended" = "ended") => {
+    if (callId.current) await postSignal({ action: "status", callId: callId.current, status }).catch(() => undefined);
+    stream.current?.getTracks().forEach((track) => track.stop()); peer.current?.close(); onClose();
+  };
+  const toggleMute = () => { stream.current?.getAudioTracks().forEach((track) => { track.enabled = muted; }); setMuted((current) => !current); };
+  const toggleCamera = () => { stream.current?.getVideoTracks().forEach((track) => { track.enabled = cameraOff; }); setCameraOff((current) => !current); };
+  return <div className="call-overlay"><section className={`call-panel ${mode}`}><div className="call-remote"><video ref={remoteVideo} autoPlay playsInline /><div className="call-identity"><Avatar initials={initials(target.name)} color={target.color} size="large" /><h2>{target.name}</h2><p>{state}</p></div></div><video className="call-local" ref={localVideo} autoPlay playsInline muted /><div className="call-controls">{!started ? <>{incomingCall && <button className="decline" onClick={() => finish("declined")}><PhoneOff size={20} /></button>}<button className="accept" onClick={begin}>{incomingCall ? <Phone size={20} /> : mode === "video" ? <Camera size={20} /> : <Phone size={20} />}<span>{incomingCall ? "Accept" : "Start"}</span></button></> : <><button className={muted ? "off" : ""} onClick={toggleMute}>{muted ? <MicOff size={20} /> : <Mic size={20} />}</button>{mode === "video" && <button className={cameraOff ? "off" : ""} onClick={toggleCamera}>{cameraOff ? <VideoOff size={20} /> : <Video size={20} />}</button>}<button className="decline" onClick={() => finish()}><PhoneOff size={21} /></button></>}</div><small>Beta peer-to-peer call · camera and microphone stay in your browser</small></section></div>;
+}
+
+function NetworkView({ viewer, onAuth, onMessage }: { viewer: Viewer | null; onAuth: () => void; onMessage: (profileId: string) => void }) {
   const [connected, setConnected] = useState<Set<string>>(new Set(["rhea"]));
   const [networkTab, setNetworkTab] = useState<"Suggested" | "Connections" | "Following">("Suggested");
+  const [sector, setSector] = useState("All sectors");
+  const [stage, setStage] = useState("All rounds");
+  const [location, setLocation] = useState("All locations");
+  const [selected, setSelected] = useState<Investor | null>(null);
   if (!viewer) return <GatedView icon={<Users size={30} />} title="Build a circle that opens doors." body="Sign in to follow investors, meet founders, and turn shared interests into warm introductions." onAuth={onAuth} />;
-  const people = networkTab === "Connections" ? investors.filter((investor) => connected.has(investor.id)) : networkTab === "Following" ? investors.slice(0, 3) : investors;
-  return <div className="workspace-page"><div className="page-title-row"><div><span className="eyebrow">PEOPLE WORTH KNOWING</span><h1>Build your circle.</h1><p>Meet people who share your curiosity, sector interests, and ambition.</p></div><div className="network-tabs">{(["Suggested", "Connections", "Following"] as const).map((tab) => <button key={tab} className={networkTab === tab ? "active" : ""} onClick={() => setNetworkTab(tab)}>{tab}{tab !== "Suggested" && <b>{tab === "Connections" ? connected.size : 3}</b>}</button>)}</div></div><div className="network-grid">{people.map((investor) => <article className="person-card card" key={investor.id}><div className="person-cover" style={{ background: `linear-gradient(135deg, ${investor.color}22, ${investor.color}66)` }} /><Avatar initials={investor.initials} color={investor.color} size="large" /><h2>{investor.name}</h2><p>{investor.role}</p><span className="thesis-label">CURIOUS ABOUT</span><strong className="thesis">{investor.thesis}</strong><div className="person-stat"><BriefcaseBusiness size={15} /><span><strong>{investor.portfolio}</strong> companies supported</span></div><button className={connected.has(investor.id) ? "connected-button" : "connect-button"} onClick={() => setConnected((current) => { const next = new Set(current); if (next.has(investor.id)) next.delete(investor.id); else next.add(investor.id); return next; })}>{connected.has(investor.id) ? <><Check size={15} /> Connected</> : <><UserPlus size={15} /> Connect</>}</button></article>)}</div>{!people.length && <div className="card empty-feed"><Users size={30} /><h3>Your next connection is one click away</h3><p>Explore suggested investors and founders to start building your circle.</p></div>}</div>;
+  const base = networkTab === "Connections" ? investors.filter((investor) => connected.has(investor.id)) : networkTab === "Following" ? investors.slice(0, 6) : investors;
+  const people = base.filter((investor) => (sector === "All sectors" || investor.sectors.includes(sector)) && (stage === "All rounds" || investor.stages.includes(stage)) && (location === "All locations" || investor.locations.includes(location)));
+  const toggleConnection = (id: string) => setConnected((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; });
+  return <div className="workspace-page"><div className="page-title-row"><div><span className="eyebrow">PEOPLE WORTH KNOWING</span><h1>Find your investor fit.</h1><p>Filter by sector, fundraising round, and geography—then inspect the actual portfolio and thesis.</p></div><div className="network-tabs">{(["Suggested", "Connections", "Following"] as const).map((tab) => <button key={tab} className={networkTab === tab ? "active" : ""} onClick={() => setNetworkTab(tab)}>{tab}{tab !== "Suggested" && <b>{tab === "Connections" ? connected.size : 6}</b>}</button>)}</div></div><section className="network-filter-bar card"><label><span>Startup area</span><select value={sector} onChange={(event) => setSector(event.target.value)}><option>All sectors</option>{Array.from(new Set(startups.map((item) => item.sector))).map((item) => <option key={item}>{item}</option>)}</select></label><label><span>Raising round</span><select value={stage} onChange={(event) => setStage(event.target.value)}><option>All rounds</option>{Array.from(new Set(startups.map((item) => item.stage))).map((item) => <option key={item}>{item}</option>)}</select></label><label><span>Geography</span><select value={location} onChange={(event) => setLocation(event.target.value)}><option>All locations</option>{Array.from(new Set(startups.map((item) => item.location))).sort().map((item) => <option key={item}>{item}</option>)}</select></label><strong>{people.length} matches</strong></section><div className="network-grid">{people.map((investor) => <article className="person-card card" key={investor.id}><button className="person-profile-hit" onClick={() => setSelected(investor)} aria-label={`View ${investor.name}'s investor profile`}><div className="person-cover" style={{ backgroundImage: `linear-gradient(135deg, ${investor.color}66, rgba(17,29,51,.45)), url(${investor.poster})` }} /><Avatar initials={investor.initials} color={investor.color} size="large" /><h2>{investor.name}</h2><p>{investor.role}</p><span className="thesis-label">CURRENT INVESTMENT FOCUS</span><strong className="thesis">{investor.thesis}</strong><div className="person-stat"><BriefcaseBusiness size={15} /><span><strong>{investor.portfolioStartupIds.length}</strong> visible portfolio companies · {investor.ticket}</span></div></button><div className="person-actions"><button className="secondary-button" onClick={() => setSelected(investor)}>View profile</button><button className={connected.has(investor.id) ? "connected-button" : "connect-button"} onClick={() => toggleConnection(investor.id)}>{connected.has(investor.id) ? <><Check size={15} /> Connected</> : <><UserPlus size={15} /> Connect</>}</button></div></article>)}</div>{!people.length && <div className="card empty-feed"><Users size={30} /><h3>No exact investor match yet</h3><p>Broaden one filter to surface more compatible people.</p></div>}{selected && <InvestorProfileModal investor={selected} onClose={() => setSelected(null)} onMessage={() => onMessage(selected.profileId)} />}</div>;
+}
+
+function InvestorProfileModal({ investor, onClose, onMessage }: { investor: Investor; onClose: () => void; onMessage: () => void }) {
+  const [scheduling, setScheduling] = useState(false);
+  const portfolio = investor.portfolioStartupIds.map((id) => startups.find((startup) => startup.id === id)).filter((startup): startup is Startup => Boolean(startup));
+  const matches = startups.filter((startup) => investor.sectors.includes(startup.sector) && investor.stages.includes(startup.stage)).slice(0, 6);
+  return <Modal onClose={onClose} wide><div className="investor-detail"><header style={{ backgroundImage: `linear-gradient(110deg, rgba(12,28,48,.92), rgba(12,28,48,.42)), url(${investor.poster})` }}><Avatar initials={investor.initials} color={investor.color} size="large" /><span className="eyebrow">VERIFIED DEMO INVESTOR</span><h1>{investor.name}</h1><p>{investor.role}</p><div><button className="primary-wide" onClick={onMessage}><MessageCircle size={16} /> Send a message</button><button className="secondary-button" onClick={() => setScheduling(true)}><CalendarCheck size={16} /> Schedule meeting</button></div></header><section><div className="investor-thesis"><span className="eyebrow">INVESTMENT MANDATE</span><h2>What {investor.name.split(" ")[0]} wants to back</h2><p>{investor.bio}</p><div className="detail-tags">{[...investor.sectors, ...investor.stages, ...investor.locations].map((item) => <span key={item}>{item}</span>)}</div><strong>Typical first ticket · {investor.ticket}</strong></div><div><span className="eyebrow">SELECT PORTFOLIO</span><h2>{portfolio.length ? "Companies supported" : "No disclosed investments yet"}</h2><div className="mini-startup-grid">{(portfolio.length ? portfolio : matches).map((startup) => <div key={startup.id}><StartupLogo startup={startup} size="small" /><span><strong>{startup.name}</strong><small>{startup.sector} · {startup.stage}</small></span></div>)}</div></div><div className="matched-startups"><span className="eyebrow">MATCHED NOW</span><h2>Startups aligned with this thesis</h2><div className="mini-startup-grid">{matches.map((startup) => <div key={startup.id}><StartupLogo startup={startup} size="small" /><span><strong>{startup.name}</strong><small>{startup.location} · {startup.stage}</small></span></div>)}</div></div></section></div>{scheduling && <ScheduleMeetingModal investor={investor} onClose={() => setScheduling(false)} />}</Modal>;
+}
+
+function ScheduleMeetingModal({ investor, onClose, conversationId }: { investor: Investor; onClose: () => void; conversationId?: string }) {
+  const [slots, setSlots] = useState<Array<{ id: string; startsAt: number; endsAt: number }>>([]);
+  const [selected, setSelected] = useState("");
+  const [notes, setNotes] = useState("");
+  const [status, setStatus] = useState("Loading available times…");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    authenticatedFetch(`/api/meetings?investorProfileId=${encodeURIComponent(investor.profileId)}`).then(async (response) => {
+      const payload = await response.json() as { slots?: Array<{ id: string; startsAt: number; endsAt: number }>; error?: string };
+      if (!response.ok) throw new Error(payload.error || "Unable to load availability.");
+      setSlots(payload.slots ?? []); setStatus(payload.slots?.length ? "Choose a free 30-minute slot." : "No open slots right now.");
+    }).catch((error) => setStatus(error instanceof Error ? error.message : "Unable to load availability."));
+  }, [investor.profileId]);
+  const book = async () => {
+    if (!selected) return;
+    setBusy(true);
+    const response = await authenticatedFetch("/api/meetings", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ slotId: selected, conversationId, notes }) });
+    const payload = await response.json() as { error?: string };
+    setBusy(false);
+    if (!response.ok) { setStatus(payload.error || "Unable to reserve that time."); return; }
+    setStatus("Meeting confirmed. It now appears in both members’ schedules.");
+    setSlots([]); setSelected("");
+  };
+  return <div className="schedule-overlay"><div className="schedule-card"><button className="modal-close" onClick={onClose}><X size={18} /></button><span className="eyebrow">CALENDAR</span><h2>Meet {investor.name}</h2><p>{status}</p><div className="slot-grid">{slots.map((slot) => <button key={slot.id} className={selected === slot.id ? "active" : ""} onClick={() => setSelected(slot.id)}><strong>{new Intl.DateTimeFormat("en-IN", { weekday: "short", day: "numeric", month: "short" }).format(slot.startsAt)}</strong><span>{new Intl.DateTimeFormat("en-IN", { hour: "numeric", minute: "2-digit", timeZoneName: "short" }).format(slot.startsAt)}</span></button>)}</div>{slots.length > 0 && <label><span>What would you like to discuss?</span><textarea value={notes} onChange={(event) => setNotes(event.target.value)} maxLength={500} rows={3} placeholder="A little context makes the meeting more useful…" /></label>}<button className="primary-wide" disabled={!selected || busy} onClick={book}>{busy ? "Reserving…" : "Confirm meeting"}</button></div></div>;
 }
 
 function GatedView({ icon, title, body, onAuth }: { icon: React.ReactNode; title: string; body: string; onAuth: () => void }) {
@@ -707,7 +915,8 @@ function AuthModal({ role, setRole, initialMode, onClose, onAuthenticated }: { r
         await onAuthenticated();
       }
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Authentication could not be completed. Please try again.");
+      const raw = caught instanceof Error ? caught.message : "Authentication could not be completed. Please try again.";
+      setError(/rate limit|too many requests|email.*exceeded/i.test(raw) ? "Supabase’s demo mailer has reached its 2-emails-per-hour limit. Sign in if you already verified, or try again after the hour resets. Custom SMTP removes this demo bottleneck." : raw);
     } finally {
       setBusy(false);
     }
@@ -725,9 +934,13 @@ function ProfileModal({ viewer, required, onClose, onSave }: { viewer: Viewer; r
   const [headline, setHeadline] = useState(viewer.headline);
   const [company, setCompany] = useState(viewer.company);
   const [bio, setBio] = useState(viewer.bio);
+  const [sectors, setSectors] = useState(viewer.sectors.join(", "));
+  const [stages, setStages] = useState(viewer.stages.join(", "));
+  const [locations, setLocations] = useState(viewer.locations.join(", "));
   const [saving, setSaving] = useState(false);
-  const save = async () => { setSaving(true); await onSave({ displayName, role, headline, company, bio }); setSaving(false); };
-  return <Modal onClose={onClose}><div className="profile-editor"><span className="eyebrow">{required ? "ONE LAST STEP" : "YOUR MEMBER PROFILE"}</span><h2>{required ? "Tell the community who you are." : "Keep your profile current."}</h2><p>Your verified email is <strong>{viewer.email}</strong>. It stays private unless you choose to share it.</p><div className="role-switch compact"><button className={role === "founder" ? "active" : ""} onClick={() => setRole("founder")}><Rocket size={18} /><span><strong>Founder</strong><small>Share a startup</small></span>{role === "founder" && <Check size={15} />}</button><button className={role === "investor" ? "active" : ""} onClick={() => setRole("investor")}><CircleDollarSign size={18} /><span><strong>Investor</strong><small>Discover companies</small></span>{role === "investor" && <Check size={15} />}</button></div><label><span>Your name</span><input value={displayName} onChange={(event) => setDisplayName(event.target.value)} maxLength={80} /></label><label><span>{role === "founder" ? "Startup or company" : "Fund or organization"}</span><input value={company} onChange={(event) => setCompany(event.target.value)} placeholder={role === "founder" ? "e.g. EmberGrid" : "e.g. Northstar Ventures"} maxLength={100} /></label><label><span>Headline</span><input value={headline} onChange={(event) => setHeadline(event.target.value)} placeholder={role === "founder" ? "Founder building cleaner industrial heat" : "Seed investor in climate and hard tech"} maxLength={120} /></label><label><span>About you</span><textarea value={bio} onChange={(event) => setBio(event.target.value)} placeholder="What are you building, backing, or hoping to meet people around?" rows={4} maxLength={600} /></label><button className="primary-wide" disabled={saving || !displayName.trim()} onClick={save}>{saving ? "Saving…" : required ? "Create my profile" : "Save profile"}</button></div></Modal>;
+  const asList = (value: string) => value.split(",").map((item) => item.trim()).filter(Boolean);
+  const save = async () => { setSaving(true); await onSave({ displayName, role, headline, company, bio, sectors: asList(sectors), stages: asList(stages), locations: asList(locations) }); setSaving(false); };
+  return <Modal onClose={onClose}><div className="profile-editor"><span className="eyebrow">{required ? "ONE LAST STEP" : "YOUR MEMBER PROFILE"}</span><h2>{required ? "Tell the community who you are." : "Keep your profile current."}</h2><p>Your verified email is <strong>{viewer.email}</strong>. It stays private unless you choose to share it.</p><div className="role-switch compact"><button className={role === "founder" ? "active" : ""} onClick={() => setRole("founder")}><Rocket size={18} /><span><strong>Founder</strong><small>Share a startup</small></span>{role === "founder" && <Check size={15} />}</button><button className={role === "investor" ? "active" : ""} onClick={() => setRole("investor")}><CircleDollarSign size={18} /><span><strong>Investor</strong><small>Discover companies</small></span>{role === "investor" && <Check size={15} />}</button></div><label><span>Your name</span><input value={displayName} onChange={(event) => setDisplayName(event.target.value)} maxLength={80} /></label><label><span>{role === "founder" ? "Startup or company" : "Fund or organization"}</span><input value={company} onChange={(event) => setCompany(event.target.value)} placeholder={role === "founder" ? "e.g. EmberGrid" : "e.g. Northstar Ventures"} maxLength={100} /></label><label><span>Headline</span><input value={headline} onChange={(event) => setHeadline(event.target.value)} placeholder={role === "founder" ? "Founder building cleaner industrial heat" : "Seed investor in climate and hard tech"} maxLength={120} /></label><label><span>About you</span><textarea value={bio} onChange={(event) => setBio(event.target.value)} placeholder="What are you building, backing, or hoping to meet people around?" rows={4} maxLength={600} /></label><div className="profile-interest-grid"><label><span>{role === "investor" ? "Sectors you invest in" : "Startup sector"}</span><input value={sectors} onChange={(event) => setSectors(event.target.value)} placeholder="Climate tech, Enterprise AI" /></label><label><span>{role === "investor" ? "Rounds you invest in" : "Current raising round"}</span><input value={stages} onChange={(event) => setStages(event.target.value)} placeholder="Pre-seed, Seed" /></label><label><span>{role === "investor" ? "Geographies you cover" : "Startup geography"}</span><input value={locations} onChange={(event) => setLocations(event.target.value)} placeholder="Bengaluru, Mumbai" /></label></div><small className="profile-routing-note">These fields power investor matching and Primary / Secondary / Requests inbox routing.</small><button className="primary-wide" disabled={saving || !displayName.trim()} onClick={save}>{saving ? "Saving…" : required ? "Create my profile" : "Save profile"}</button></div></Modal>;
 }
 
 function ComposerModal({ viewer, onClose, onSubmit }: { viewer: Viewer; onClose: () => void; onSubmit: (draft: PostDraft) => Promise<boolean> }) {
@@ -792,10 +1005,6 @@ function ComposerModal({ viewer, onClose, onSubmit }: { viewer: Viewer; onClose:
   const close = () => { discardMedia(); onClose(); };
   const publish = async () => { setPublishing(true); const done = await onSubmit({ headline: headline.trim(), body: body.trim(), tags, media }); if (!done) setPublishing(false); };
   return <Modal onClose={close}><div className="compose-modal"><div className="compose-title"><Avatar initials={viewer.initials} /><div><h2>Create a post</h2><p>Posting as {viewer.company || viewer.name} · owned by your account</p></div></div><label><span>Headline</span><input value={headline} onChange={(event) => setHeadline(event.target.value)} placeholder="What should the network know?" /></label><label><span>Your update</span><textarea value={body} onChange={(event) => setBody(event.target.value)} placeholder="Share the story, the milestone, or the question behind it..." rows={6} maxLength={1500} /></label><label><span>Topics</span><input value={tags} onChange={(event) => setTags(event.target.value)} placeholder="AI, SeedRound, Product" /></label>{preview && <div className="upload-preview">{previewType === "video" ? <video src={preview} controls muted /> : <img src={preview} alt="Upload preview" />}<button onClick={discardMedia} aria-label="Remove uploaded media"><X size={15} /></button>{uploading && <div className="upload-overlay"><strong>{uploadProgress}%</strong><span>Uploading securely…</span></div>}</div>}{uploadError && <p className="upload-error">{uploadError}</p>}<div className="compose-tools"><label><Video size={16} /> Add video<input type="file" accept="video/mp4,video/webm,video/quicktime" onChange={(event) => upload(event.target.files?.[0])} /></label><label><ImageIcon size={16} /> Add image<input type="file" accept="image/jpeg,image/png,image/webp,image/gif" onChange={(event) => upload(event.target.files?.[0])} /></label>{media && <span className="upload-ready"><Check size={14} /> {media.fileName}</span>}</div>{uploading && <div className="upload-progress" aria-label={`Upload ${uploadProgress}% complete`}><span style={{ width: `${uploadProgress}%` }} /></div>}<div className="compose-footer"><span>{body.length}/1,500</span><button className="primary-wide" disabled={uploading || publishing || !headline.trim() || !body.trim()} onClick={publish}>{publishing ? "Publishing…" : uploading ? `Uploading ${uploadProgress}%` : <>Publish post <Send size={15} /></>}</button></div></div></Modal>;
-}
-
-function VideoModal({ post, onClose }: { post: Post; onClose: () => void }) {
-  return <Modal onClose={onClose} wide><div className="video-modal"><div className="video-modal-player"><video key={post.mediaUrl} controls autoPlay playsInline preload="auto" poster={post.poster} aria-label={`${post.startup}: ${post.mediaTitle}`}><source src={post.mediaUrl} type="video/mp4" />Your browser does not support MP4 video playback.</video></div><div className="video-modal-copy"><span className="video-now"><i /> NOW PLAYING · {post.duration}</span><h2>{post.mediaTitle}</h2><p>{post.headline}</p><div><span className="startup-logo logo-small" style={{ background: post.logoColor }}>{post.logo}</span><span><strong>{post.startup}</strong><small>{post.meta.split(" · ").slice(0, 2).join(" · ")}</small></span></div></div></div></Modal>;
 }
 
 function StartupModal({ startup, followed, onClose, onFollow, onMessage }: { startup: Startup; followed: boolean; onClose: () => void; onFollow: () => void; onMessage: () => void }) {
