@@ -6,6 +6,10 @@ const VIDEO_TYPES = new Set(["video/mp4", "video/webm", "video/quicktime"]);
 const IMAGE_LIMIT = 15 * 1024 * 1024;
 const VIDEO_LIMIT = 80 * 1024 * 1024;
 const CHUNK_LIMIT = 900 * 1024;
+// Stay comfortably below R2's 10 GB-month free storage allowance and
+// 1 million monthly Class A operations during the public demo.
+const GLOBAL_STORAGE_LIMIT = 8 * 1024 * 1024 * 1024;
+const GLOBAL_DAILY_UPLOAD_LIMIT = 250;
 
 type AssetRow = {
   id: string;
@@ -51,6 +55,10 @@ export async function POST(request: Request) {
       .bind(Date.now() - 24 * 60 * 60 * 1000, profile.id).first<{ daily_count: number; active_bytes: number }>();
     if ((quota?.daily_count ?? 0) >= 20) return Response.json({ error: "You have reached today’s upload limit." }, { status: 429 });
     if ((quota?.active_bytes ?? 0) + sizeBytes > 500 * 1024 * 1024) return Response.json({ error: "Your media library has reached its 500 MB early-access limit." }, { status: 413 });
+    const globalQuota = await getD1().prepare("SELECT COALESCE(SUM(CASE WHEN created_at >= ? THEN 1 ELSE 0 END), 0) AS daily_count, COALESCE(SUM(CASE WHEN status != 'deleted' THEN size_bytes ELSE 0 END), 0) AS active_bytes FROM media_assets")
+      .bind(Date.now() - 24 * 60 * 60 * 1000).first<{ daily_count: number; active_bytes: number }>();
+    if ((globalQuota?.daily_count ?? 0) >= GLOBAL_DAILY_UPLOAD_LIMIT) return Response.json({ error: "The public demo has reached today’s upload capacity. Please try again tomorrow." }, { status: 429 });
+    if ((globalQuota?.active_bytes ?? 0) + sizeBytes > GLOBAL_STORAGE_LIMIT) return Response.json({ error: "The public demo media library is full. Please contact Innovestart to free space." }, { status: 413 });
     const id = crypto.randomUUID();
     const safeName = (input.fileName ?? "").replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || (isVideo ? "video.mp4" : "image.jpg");
     const key = `members/${profile.id}/${id}-${safeName}`;
@@ -75,6 +83,13 @@ export async function PUT(request: Request) {
   const asset = await getD1().prepare("SELECT id, owner_profile_id, r2_key, file_name, content_type, size_bytes, uploaded_bytes, chunk_count, status FROM media_assets WHERE id = ? AND owner_profile_id = ?")
     .bind(id, profile.id).first<AssetRow>();
   if (!asset || asset.status !== "uploading") return Response.json({ error: "Upload not found or already completed." }, { status: 404 });
+  const expectedPartCount = Math.ceil(asset.size_bytes / CHUNK_LIMIT);
+  if (partNumber >= expectedPartCount) return Response.json({ error: "This upload part is outside the file boundary." }, { status: 400 });
+  const expectedPartBytes = Math.min(CHUNK_LIMIT, asset.size_bytes - partNumber * CHUNK_LIMIT);
+  if (chunk.byteLength !== expectedPartBytes) return Response.json({ error: "This upload part has an unexpected size." }, { status: 400 });
+  const existingPart = await getD1().prepare("SELECT size_bytes FROM media_parts WHERE asset_id = ? AND part_number = ?")
+    .bind(id, partNumber).first<{ size_bytes: number }>();
+  if (existingPart) return Response.json({ uploadedBytes: asset.uploaded_bytes, totalBytes: asset.size_bytes });
   const partKey = `${asset.r2_key}/parts/${String(partNumber).padStart(5, "0")}`;
   await getMediaBucket().put(partKey, chunk, { httpMetadata: { contentType: "application/octet-stream" } });
   const d1 = getD1();
