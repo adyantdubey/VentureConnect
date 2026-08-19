@@ -57,6 +57,7 @@ export async function ensureDatabase() {
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_media_assets_owner_created ON media_assets (owner_profile_id, created_at)"),
     d1.prepare("CREATE TABLE IF NOT EXISTS media_parts (asset_id TEXT NOT NULL, part_number INTEGER NOT NULL, r2_key TEXT NOT NULL, size_bytes INTEGER NOT NULL, created_at INTEGER NOT NULL)"),
     d1.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_media_parts_asset_part ON media_parts (asset_id, part_number)"),
+    d1.prepare("CREATE TABLE IF NOT EXISTS usage_counters (key TEXT PRIMARY KEY NOT NULL, value INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL)"),
     d1.prepare("CREATE TABLE IF NOT EXISTS startups (id TEXT PRIMARY KEY NOT NULL, owner_profile_id TEXT, name TEXT NOT NULL, sector TEXT NOT NULL, stage TEXT NOT NULL, location TEXT NOT NULL, description TEXT NOT NULL, created_at INTEGER NOT NULL)"),
     d1.prepare("CREATE INDEX IF NOT EXISTS idx_startups_sector_stage ON startups (sector, stage)"),
     d1.prepare("CREATE TABLE IF NOT EXISTS follows (id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, profile_id TEXT NOT NULL, startup_id TEXT NOT NULL, created_at INTEGER NOT NULL)"),

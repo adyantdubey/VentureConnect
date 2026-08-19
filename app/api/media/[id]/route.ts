@@ -12,6 +12,10 @@ type MediaRow = {
 };
 type PartRow = { part_number: number; r2_key: string; size_bytes: number };
 
+// R2 includes 10 million Class B reads each month. Reserve a conservative
+// ceiling so public demo traffic cannot cross into billable read operations.
+const MONTHLY_R2_READ_LIMIT = 8_000_000;
+
 export async function GET(request: Request, context: { params: Promise<{ id: string }> | { id: string } }) {
   await ensureDatabase();
   const params = await context.params;
@@ -31,6 +35,16 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
   const range = parseRange(request.headers.get("range"), row.size_bytes);
   if (!range) return new Response("Range not satisfiable", { status: 416, headers: { "content-range": `bytes */${row.size_bytes}` } });
 
+  const plannedReadOps = countPartsInRange(parts.results, range.start, range.end);
+  const counterKey = `r2-class-b:${new Date().toISOString().slice(0, 7)}`;
+  const now = Date.now();
+  const d1 = getD1();
+  await d1.prepare("INSERT OR IGNORE INTO usage_counters (key, value, updated_at) VALUES (?, 0, ?)")
+    .bind(counterKey, now).run();
+  const reservation = await d1.prepare("UPDATE usage_counters SET value = value + ?, updated_at = ? WHERE key = ? AND value + ? <= ?")
+    .bind(plannedReadOps, now, counterKey, plannedReadOps, MONTHLY_R2_READ_LIMIT).run();
+  if (!reservation.meta.changes) return new Response("The public demo has reached its monthly media-view allowance.", { status: 429 });
+
   const headers = new Headers({
     "content-type": row.content_type,
     "content-disposition": `inline; filename="${row.file_name.replace(/["\r\n]/g, "")}"`,
@@ -41,6 +55,18 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
   headers.set("content-length", String(length));
   if (range.partial) headers.set("content-range", `bytes ${range.start}-${range.end}/${row.size_bytes}`);
   return new Response(streamParts(parts.results, range.start, range.end), { status: range.partial ? 206 : 200, headers });
+}
+
+function countPartsInRange(parts: PartRow[], requestedStart: number, requestedEnd: number) {
+  let count = 0;
+  let globalOffset = 0;
+  for (const part of parts) {
+    const partStart = globalOffset;
+    const partEnd = partStart + part.size_bytes - 1;
+    globalOffset += part.size_bytes;
+    if (partEnd >= requestedStart && partStart <= requestedEnd) count += 1;
+  }
+  return count;
 }
 
 function parseRange(value: string | null, total: number): { start: number; end: number; partial: boolean } | null {

@@ -183,6 +183,12 @@ export const modelVersions = sqliteTable("model_versions", {
   createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
 });
 
+export const usageCounters = sqliteTable("usage_counters", {
+  key: text("key").primaryKey(),
+  value: integer("value").notNull().default(0),
+  updatedAt: integer("updated_at").notNull(),
+});
+
 export const matchScores = sqliteTable("match_scores", {
   id: text("id").primaryKey(),
   startupId: text("startup_id").notNull(),
