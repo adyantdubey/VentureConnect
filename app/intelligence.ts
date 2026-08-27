@@ -1,7 +1,7 @@
 import { demoMembers, investors, startups, type Investor, type Startup } from "./synthetic-data";
 import matchModel from "./match-model.json";
 
-export const MATCH_MODEL_VERSION = "innovestart-match-v1.0";
+export const MATCH_MODEL_VERSION = "fayvar-match-v1.0";
 export const MATCH_MODEL_METADATA = matchModel;
 
 export type MarketSource = {

@@ -136,7 +136,7 @@ export const startups: Startup[] = startupSeeds.map(([id, name, sector, stage, l
   stage,
   location,
   tagline,
-  description: `${name} is a synthetic Innovestart demo company building practical ${sector.toLowerCase()} infrastructure for fast-growing teams and communities. Its traction and fundraising figures are illustrative, not investment claims.`,
+  description: `${name} is a synthetic Fayvar demo company building practical ${sector.toLowerCase()} infrastructure for fast-growing teams and communities. Its traction and fundraising figures are illustrative, not investment claims.`,
   ask: askByStage[stage],
   growth: index % 3 === 0 ? `${12 + index * 2}% MoM` : index % 3 === 1 ? `${4 + index} paid pilots` : `₹${(1.2 + index * .18).toFixed(1)} Cr ARR`,
   signal: index % 2 ? `${82 + (index % 13)}% retention` : `${3 + (index % 9)} design partners`,

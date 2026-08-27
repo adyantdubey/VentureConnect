@@ -21,19 +21,19 @@ export async function generateMetadata(): Promise<Metadata> {
 
   return {
     metadataBase: new URL(origin),
-    title: "Innovestart — Startup intelligence, built for both sides",
+    title: "Fayvar — Startup intelligence, built for both sides",
     description: "Discover companies, understand investor fit, size markets, route trusted outreach, and move promising conversations forward.",
     openGraph: {
       type: "website",
-      title: "Innovestart — Startup intelligence, built for both sides",
+      title: "Fayvar — Startup intelligence, built for both sides",
       description: "Discover companies, understand investor fit, size markets, route trusted outreach, and move promising conversations forward.",
       url: origin,
-      siteName: "Innovestart",
-      images: [{ url: `${origin}/innovestart-network-v2.png`, width: 1731, height: 909, alt: "An abstract network of startups and investors connected through Innovestart" }],
+      siteName: "Fayvar",
+      images: [{ url: `${origin}/innovestart-network-v2.png`, width: 1731, height: 909, alt: "An abstract network of startups and investors connected through Fayvar" }],
     },
     twitter: {
       card: "summary_large_image",
-      title: "Innovestart — Startup intelligence, built for both sides",
+      title: "Fayvar — Startup intelligence, built for both sides",
       description: "Discover companies, understand investor fit, size markets, route trusted outreach, and move promising conversations forward.",
       images: [`${origin}/innovestart-network-v2.png`],
     },
